@@ -1,0 +1,67 @@
+# Keyword term lists used by the filtering steps.
+
+# Step 1 — a post must mention at least one of these medicines (matched by any
+# brand/generic synonym). The key is the canonical generic name (category).
+medicine_terms:
+  acetaminophen: [acetaminophen, tylenol, paracetamol, apap]
+  ibuprofen: [ibuprofen, advil, motrin]
+  naproxen: [naproxen, aleve, naproxen sodium]
+  aspirin: [aspirin, bayer, asa]
+  diphenhydramine: [diphenhydramine, benadryl, zzzquil, unisom]
+
+# Step 3 — a candidate must contain at least one dosing-related term.
+dosing_terms:
+  - can I take
+  - can I take more
+  - take another
+  - another dose
+  - how much
+  - how many
+  - too much
+  - overdose
+  - accidentally took
+  - took too many
+  - last dose
+  - next dose
+  - wait
+  - hours ago
+  - 24 hours
+  - same day
+  - mg
+  - tablet
+  - caplet
+  - pill
+  - dose
+  - dosage
+  - every 4 hours
+  - every 6 hours
+  - every 8 hours
+  - every 12 hours
+  - mixed with
+  - combine
+  - safe to take
+
+# Step 3 — posts hitting any of these are dropped as off-topic.
+exclude_terms:
+  - dog
+  - cat
+  - pet
+  - baby
+  - infant
+  - toddler
+  - child
+  - kid
+  - pregnant
+  - pregnancy
+  - coupon
+  - sale
+  - ad
+  - commercial
+  - news
+  - lawsuit
+  - stock
+  - meme
+  - joke
+  - recreational
+  - trip
+  - getting high

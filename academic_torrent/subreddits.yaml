@@ -1,0 +1,8 @@
+# Subreddits to crawl.
+subreddits:
+  - AskDocs
+  - medical_advice
+  - AskPharmacists
+  - pharmacy
+  - NoStupidQuestions
+  - TooAfraidToAsk

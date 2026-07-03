@@ -1,0 +1,14 @@
+{
+  // Treat academic_torrent/ as an import root so Pylance resolves
+  // `import step0_config` as a valid top-level module and stops rewriting it
+  // to `import academic_torrent.step0_config`.
+  "python.analysis.extraPaths": ["academic_torrent"],
+
+  // Prefer plain/relative imports; don't suggest fully-qualified package paths.
+  "python.analysis.importFormat": "relative",
+
+  // Don't auto-organize/rewrite imports on save.
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "never"
+  }
+}

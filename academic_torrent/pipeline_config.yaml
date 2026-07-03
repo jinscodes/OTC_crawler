@@ -1,0 +1,12 @@
+# Execution parameters shared across all pipeline steps.
+
+# Keep posts whose created_utc falls within this (inclusive) year range.
+date_range:
+  start_year: 2017
+  end_year: 2021
+
+# Number of subreddits processed in parallel during Step 1 (CPU-bound).
+workers: 2
+
+# Skip decompression when a non-empty {subreddit}.jsonl already exists.
+reuse_jsonl: true
