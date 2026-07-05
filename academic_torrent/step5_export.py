@@ -11,7 +11,7 @@ Output : TBD (e.g. output/without_api/review_export.csv)
 Left as a placeholder on purpose; implementation to be added later.
 """
 
-import step0_config as cfg  # noqa: F401  (kept so the module wiring is ready)
+import academic_torrent.step0_config as cfg  # noqa: F401  (kept so the module wiring is ready)
 
 
 def run(subreddits: list[str] | None = None) -> None:
