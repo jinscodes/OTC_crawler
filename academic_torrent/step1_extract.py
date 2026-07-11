@@ -1,23 +1,53 @@
 """
-Step 1 — Fast extraction.
+Step 1 — Fast extraction (parallel).
 
 Decompress zst/{subreddit}.zst → jsonl/{subreddit}.jsonl, then scan the JSONL and
 keep only posts that are (a) inside the date range and (b) mention a target
 medicine. This is the cheap, high-volume first pass.
 
-Output (per subreddit): output/without_api/{subreddit}/posts_all.json
+Parallelization
+---------------
+The text processing over the raw posts is CPU-bound and each post is independent
+(embarrassingly parallel). Posts inside one file are split into batches and the
+batches run across CPU workers with joblib (n_jobs from pipeline_config.yaml,
+-1 = all cores). Subreddits themselves are processed sequentially so a single
+large subreddit still uses every core.
 
-Subreddits run in parallel (CPU-bound). A missing .zst is skipped, not fatal.
+Note: decompression is a sequential stream and is not parallelized.
+
+Output (per subreddit): output/step1_extract/{subreddit}.json
 
 Run standalone:  python step1_extract.py
 """
 
 import json
+import math
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
+from joblib import Parallel, delayed
+
 import step0_config as cfg
+
+
+def resolve_batch_size(jsonl_path: str) -> int:
+    """
+    Decide how many posts go in one parallel task for this file.
+
+    If cfg.BATCH_SIZE is a fixed int, use it. If it is "auto", count the file's
+    lines (cheap, pure I/O) and size batches so there are about
+    cfg.BATCHES_PER_WORKER batches per core — this keeps every core busy
+    regardless of how big or small the subreddit is.
+    """
+    if isinstance(cfg.BATCH_SIZE, int) and cfg.BATCH_SIZE > 0:
+        return cfg.BATCH_SIZE
+
+    with open(jsonl_path, "rb") as f:      # ~1.4s for a 6 GB file; no parsing
+        n_lines = sum(1 for _ in f)
+
+    workers = cfg.effective_workers()
+    target_batches = max(workers, workers * cfg.BATCHES_PER_WORKER)
+    return max(1, math.ceil(n_lines / target_batches))
 
 
 def decompress(subreddit: str) -> str:
@@ -48,87 +78,137 @@ def decompress(subreddit: str) -> str:
     return jsonl_path
 
 
-def extract_one(subreddit: str) -> dict:
+def _iter_batches(fin, batch_size: int):
+    """Yield lists of up to batch_size non-empty lines from an open file."""
+    batch: list[str] = []
+    for line in fin:
+        line = line.strip()
+        if not line:
+            continue
+        batch.append(line)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def process_batch(lines: list[str], medicine_terms: dict, start_ts: int,
+                  end_ts: int, subreddit: str, crawl_ts: str) -> tuple[list[dict], dict]:
     """
-    Decompress + fast-filter one subreddit. Writes posts_all.json, updates the
-    summary, and returns this subreddit's stats.
+    Process one batch of raw JSONL lines (runs inside a joblib worker).
+    Applies the date + medicine filters and returns (records, partial_stats).
+    Kept module-level and self-contained so it is picklable across processes.
     """
-    keywords = cfg.load_keywords()
+    # Compile patterns once per batch (cheap relative to batch size).
     medicine_patterns = {
         generic: cfg.build_pattern(synonyms)
-        for generic, synonyms in keywords["medicine_terms"].items()
+        for generic, synonyms in medicine_terms.items()
     }
+
+    records: list[dict] = []
+    total = len(lines)
+    skipped_date = skipped_medicine = 0
+
+    for raw_line in lines:
+        try:
+            post = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+
+        # Date filter
+        try:
+            created_utc = int(post.get("created_utc", 0))
+        except (ValueError, TypeError):
+            continue
+        if not (start_ts <= created_utc <= end_ts):
+            skipped_date += 1
+            continue
+
+        # Medicine filter (required)
+        title = post.get("title", "") or ""
+        body  = post.get("selftext", "") or ""
+        if body in ("[deleted]", "[removed]"):
+            body = ""
+        text = f"{title} {body}"
+
+        matched_generic = matched_synonym = None
+        for generic, pat in medicine_patterns.items():
+            m = pat.search(text)
+            if m:
+                matched_generic = generic
+                matched_synonym = m.group()
+                break
+        if not matched_generic:
+            skipped_medicine += 1
+            continue
+
+        post_id        = post.get("id", "")
+        subreddit_name = post.get("subreddit", subreddit)
+        permalink      = post.get("permalink", "")
+        url = (
+            post.get("url") or
+            (f"https://www.reddit.com{permalink}" if permalink else
+             f"https://www.reddit.com/r/{subreddit_name}/comments/{post_id}/")
+        )
+        created_time = datetime.fromtimestamp(created_utc, tz=timezone.utc).isoformat()
+
+        records.append({
+            "post_id":                  post_id,
+            "subreddit":                subreddit_name,
+            "title":                    title,
+            "body":                     body,
+            "url":                      url,
+            "created_time":             created_time,
+            "crawl_timestamp":          crawl_ts,
+            "matched_medicine":         matched_generic,
+            "matched_brand_or_generic": matched_synonym,
+        })
+
+    stats = {
+        "total":            total,
+        "skipped_date":     skipped_date,
+        "skipped_medicine": skipped_medicine,
+        "kept":             len(records),
+    }
+    return records, stats
+
+
+def extract_one(subreddit: str) -> dict:
+    """
+    Decompress + parallel fast-filter one subreddit. Writes its posts_all file,
+    updates the summary, and returns this subreddit's stats.
+    """
+    keywords = cfg.load_keywords()
+    medicine_terms = keywords["medicine_terms"]
     crawl_ts = cfg.now_iso()
 
     jsonl_path = decompress(subreddit)
-    posts: list[dict] = []
-    total = kept = skipped_date = skipped_medicine = 0
+    batch_size = resolve_batch_size(jsonl_path)
 
-    print(f"[step1] r/{subreddit}: scanning {os.path.basename(jsonl_path)} ...")
+    print(f"[step1] r/{subreddit}: processing {os.path.basename(jsonl_path)} "
+          f"(n_jobs={cfg.N_JOBS}, batch_size={batch_size:,}) ...")
+
+    # A generator of batches keeps memory bounded; joblib pre-dispatches a few
+    # batches at a time rather than materializing the whole file.
     with open(jsonl_path, "r", encoding="utf-8") as fin:
-        for raw_line in fin:
-            raw_line = raw_line.strip()
-            if not raw_line:
-                continue
-            total += 1
-
-            try:
-                post = json.loads(raw_line)
-            except json.JSONDecodeError:
-                continue
-
-            # Date filter
-            try:
-                created_utc = int(post.get("created_utc", 0))
-            except (ValueError, TypeError):
-                continue
-            if not (cfg.START_TS <= created_utc <= cfg.END_TS):
-                skipped_date += 1
-                continue
-
-            # Medicine filter (required)
-            title = post.get("title", "") or ""
-            body  = post.get("selftext", "") or ""
-            if body in ("[deleted]", "[removed]"):
-                body = ""
-            text = f"{title} {body}"
-
-            matched_generic = matched_synonym = None
-            for generic, pat in medicine_patterns.items():
-                m = pat.search(text)
-                if m:
-                    matched_generic = generic
-                    matched_synonym = m.group()
-                    break
-            if not matched_generic:
-                skipped_medicine += 1
-                continue
-
-            post_id        = post.get("id", "")
-            subreddit_name = post.get("subreddit", subreddit)
-            permalink      = post.get("permalink", "")
-            url = (
-                post.get("url") or
-                (f"https://www.reddit.com{permalink}" if permalink else
-                 f"https://www.reddit.com/r/{subreddit_name}/comments/{post_id}/")
+        batches = _iter_batches(fin, batch_size)
+        batch_results = Parallel(n_jobs=cfg.N_JOBS)(
+            delayed(process_batch)(
+                batch, medicine_terms, cfg.START_TS, cfg.END_TS, subreddit, crawl_ts
             )
-            created_time = datetime.fromtimestamp(created_utc, tz=timezone.utc).isoformat()
+            for batch in batches
+        )
 
-            posts.append({
-                "post_id":                  post_id,
-                "subreddit":                subreddit_name,
-                "title":                    title,
-                "body":                     body,
-                "url":                      url,
-                "created_time":             created_time,
-                "crawl_timestamp":          crawl_ts,
-                "matched_medicine":         matched_generic,
-                "matched_brand_or_generic": matched_synonym,
-            })
-            kept += 1
-
-            if total % 100_000 == 0:
-                print(f"  [step1] r/{subreddit}: {total:,} scanned / {kept:,} kept")
+    # Merge batch outputs (order preserved by joblib).
+    posts: list[dict] = []
+    total = skipped_date = skipped_medicine = kept = 0
+    for records, st in batch_results:
+        posts.extend(records)
+        total            += st["total"]
+        skipped_date     += st["skipped_date"]
+        skipped_medicine += st["skipped_medicine"]
+        kept             += st["kept"]
 
     cfg.write_json(cfg.step_path(cfg.DIR_STEP1, subreddit), posts)
 
@@ -137,25 +217,28 @@ def extract_one(subreddit: str) -> dict:
         "skipped_date":        skipped_date,
         "skipped_no_medicine": skipped_medicine,
         "kept_all":            kept,
+        "batch_size":          batch_size,
+        "batches":             len(batch_results),
     }
     cfg.update_summary(subreddit, "step1_extract", stats)
-    print(f"[step1] r/{subreddit}: kept {kept:,} / {total:,}")
+    print(f"[step1] r/{subreddit}: kept {kept:,} / {total:,} "
+          f"({len(batch_results)} batches)")
     return stats
 
 
 def run(subreddits: list[str] | None = None) -> None:
     subreddits = subreddits or cfg.load_subreddits()
-    print(f"[step1] extract — subreddits: {subreddits} (workers={cfg.WORKERS})")
-    with ProcessPoolExecutor(max_workers=cfg.WORKERS) as pool:
-        futures = {pool.submit(extract_one, s): s for s in subreddits}
-        for future in as_completed(futures):
-            subreddit = futures[future]
-            try:
-                future.result()
-            except FileNotFoundError as exc:
-                print(f"[SKIP] r/{subreddit}: {exc}")
-            except Exception as exc:  # noqa: BLE001
-                print(f"[ERROR] r/{subreddit}: {exc}")
+    print(f"[step1] extract — subreddits: {subreddits} "
+          f"(n_jobs={cfg.N_JOBS}, batch_size={cfg.BATCH_SIZE})")
+    # Subreddits run sequentially; parallelism happens inside each file so a
+    # single large subreddit still saturates all cores.
+    for subreddit in subreddits:
+        try:
+            extract_one(subreddit)
+        except FileNotFoundError as exc:
+            print(f"[SKIP] r/{subreddit}: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ERROR] r/{subreddit}: {exc}")
 
 
 if __name__ == "__main__":

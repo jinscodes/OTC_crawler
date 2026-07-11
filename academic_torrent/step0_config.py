@@ -15,6 +15,7 @@ Running this file prints the resolved config so you can sanity-check it.
 """
 
 import json
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -68,8 +69,35 @@ def load_subreddits() -> list[str]:
 _CONFIG      = _load_yaml(CONFIG_FILE)
 _DATE_RANGE  = _CONFIG.get("date_range", {})
 
-WORKERS     = _CONFIG.get("workers", 2)          # parallel subreddits in Step 1
-REUSE_JSONL = _CONFIG.get("reuse_jsonl", True)   # skip decompress if .jsonl exists
+N_JOBS      = _CONFIG.get("n_jobs", -1)              # joblib workers (-1 = all cores)
+BATCH_SIZE  = _CONFIG.get("batch_size", "auto")      # "auto" or a fixed int
+BATCHES_PER_WORKER = _CONFIG.get("batches_per_worker", 4)  # used when BATCH_SIZE == "auto"
+MIN_PARALLEL_ROWS  = _CONFIG.get("min_parallel_rows", 5000)  # below this: run serial
+REUSE_JSONL = _CONFIG.get("reuse_jsonl", True)       # skip decompress if .jsonl exists
+
+
+def effective_workers() -> int:
+    """Resolve N_JOBS to an actual worker count (n_jobs=-1 → machine core count)."""
+    if isinstance(N_JOBS, int) and N_JOBS > 0:
+        return N_JOBS
+    return os.cpu_count() or 1
+
+
+def batch_size_for(n_items: int) -> int:
+    """
+    Adaptive batch size for an in-memory list of n_items: size batches so there
+    are ~BATCHES_PER_WORKER per core. Honors a fixed BATCH_SIZE if configured.
+    """
+    if isinstance(BATCH_SIZE, int) and BATCH_SIZE > 0:
+        return BATCH_SIZE
+    target_batches = max(1, effective_workers() * BATCHES_PER_WORKER)
+    return max(1, math.ceil(n_items / target_batches))
+
+
+def chunked(items: list, size: int):
+    """Yield successive slices of `items` of length `size`."""
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 START_YEAR = _DATE_RANGE.get("start_year", 2017)
 END_YEAR   = _DATE_RANGE.get("end_year", 2021)
@@ -86,7 +114,16 @@ def build_pattern(terms: list[str]) -> re.Pattern:
 
 
 def find_all_matches(pattern: re.Pattern, text: str) -> list[str]:
-    return list({m.group().lower() for m in pattern.finditer(text)})
+    """Unique matches (lowercased), in order of first appearance — deterministic
+    across processes so parallel and serial runs produce identical output."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in pattern.finditer(text):
+        g = m.group().lower()
+        if g not in seen:
+            seen.add(g)
+            out.append(g)
+    return out
 
 
 # ── IO helpers ───────────────────────────────────────────────────────────────
@@ -142,7 +179,9 @@ if __name__ == "__main__":
     print(f"  jsonl dir    : {JSONL_DIR}")
     print(f"  output base  : {OUTPUT_BASE}")
     print(f"  date range   : {START_YEAR}-{END_YEAR}")
-    print(f"  workers      : {WORKERS}")
+    print(f"  n_jobs       : {N_JOBS}  (effective {effective_workers()}; detected {os.cpu_count()})")
+    print(f"  batch_size   : {BATCH_SIZE}"
+          + (f"  (~{BATCHES_PER_WORKER} batches/core)" if BATCH_SIZE == "auto" else ""))
     print(f"  reuse jsonl  : {REUSE_JSONL}")
     print(f"  subreddits   : {load_subreddits()}")
     print(f"  medicines    : {list(keywords['medicine_terms'])}")
