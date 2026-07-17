@@ -1,25 +1,3 @@
-"""
-Step 1 — Fast extraction (parallel).
-
-Decompress zst/{subreddit}.zst → jsonl/{subreddit}.jsonl, then scan the JSONL and
-keep only posts that are (a) inside the date range and (b) mention a target
-medicine. This is the cheap, high-volume first pass.
-
-Parallelization
----------------
-The text processing over the raw posts is CPU-bound and each post is independent
-(embarrassingly parallel). Posts inside one file are split into batches and the
-batches run across CPU workers with joblib (n_jobs from pipeline_config.yaml,
--1 = all cores). Subreddits themselves are processed sequentially so a single
-large subreddit still uses every core.
-
-Note: decompression is a sequential stream and is not parallelized.
-
-Output (per subreddit): output/step1_extract/{subreddit}.json
-
-Run standalone:  python step1_extract.py
-"""
-
 import json
 import math
 import os

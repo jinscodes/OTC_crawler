@@ -1,19 +1,3 @@
-"""
-Step 2 — Cleaning.
-
-Read Step 1's posts_all.json and normalize the text so downstream filtering and
-LLM annotation see consistent input:
-  • drop duplicate post_ids (keep first),
-  • strip URLs and markdown link syntax,
-  • collapse whitespace/newlines,
-  • drop posts with no usable text,
-  • add a combined "clean_text" field (title + body, normalized).
-
-Output (per subreddit): output/without_api/{subreddit}/posts_cleaned.json
-
-Run standalone:  python step2_clean.py
-"""
-
 import re
 
 from joblib import Parallel, delayed

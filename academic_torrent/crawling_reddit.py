@@ -20,10 +20,10 @@ Run:  python crawling_reddit.py
 
 import os
 
-import step0_config as cfg
-import step1_extract
-import step2_clean
-import step3_filter
+import academic_torrent.step0_config as cfg
+import academic_torrent.step1_extract as step1_extract
+import academic_torrent.step2_clean as step2_clean
+import academic_torrent.step3_filter as step3_filter
 
 # Step 4/5 are placeholders; import lazily in run_pipeline once implemented.
 
@@ -67,10 +67,10 @@ def run_pipeline() -> None:
     step3_filter.run(subreddits)
 
     if RUN_LLM_ANNOTATION:
-        import step4_llm_annotation
+        import academic_torrent.step4_llm_annotation as step4_llm_annotation
         step4_llm_annotation.run(subreddits)
     if RUN_EXPORT:
-        import step5_export
+        import academic_torrent.step5_export as step5_export
         step5_export.run(subreddits)
 
     write_aggregate(subreddits)

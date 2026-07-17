@@ -1,16 +1,3 @@
-"""
-Step 3 — Precise filtering.
-
-Read Step 2's posts_cleaned.json and reduce it to high-quality candidates:
-  • drop posts hitting EXCLUDE_TERMS (pets, kids, pregnancy, ads, …),
-  • require at least one dosing-related term,
-  • categorize by medicine and record the matched dosing terms.
-
-Output (per subreddit): output/without_api/{subreddit}/posts_candidates.json
-
-Run standalone:  python step3_filter.py
-"""
-
 from joblib import Parallel, delayed
 
 import step0_config as cfg
