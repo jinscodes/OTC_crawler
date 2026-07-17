@@ -8,11 +8,12 @@ date_range:
 # Step 1 parallel text processing (joblib).
 # Posts inside each raw file are split into batches and processed across CPU
 # workers in parallel.
-n_jobs: -1               # number of CPU workers; -1 = use all available cores
-batch_size: auto         # "auto" = size each file so it makes ~batches_per_worker
-                         #          batches per core; or set a fixed integer
-batches_per_worker: 4    # (auto only) target batches per core for load balancing
-min_parallel_rows: 5000  # steps 2/3 run serially below this row count (overhead)
+n_jobs: -1 # number of CPU workers; -1 = use all available cores
+batch_size:
+  auto # "auto" = size each file so it makes ~batches_per_worker
+  #          batches per core; or set a fixed integer
+batches_per_worker: 4 # (auto only) target batches per core for load balancing
+min_parallel_rows: 5000 # steps 2/3 run serially below this row count (overhead)
 
 # Skip decompression when a non-empty {subreddit}.jsonl already exists.
 reuse_jsonl: true
