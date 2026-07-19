@@ -1,13 +1,150 @@
-# Keyword term lists used by the filtering steps.
-
 # Step 1 — a post must mention at least one of these medicines (matched by any
-# brand/generic synonym). The key is the canonical generic name (category).
 medicine_terms:
-  acetaminophen: [acetaminophen, tylenol, paracetamol, apap]
-  ibuprofen: [ibuprofen, advil, motrin]
-  naproxen: [naproxen, aleve, naproxen sodium]
-  aspirin: [aspirin, bayer, asa]
-  diphenhydramine: [diphenhydramine, benadryl, zzzquil, unisom]
+  acetaminophen: [acetaminophen, tylenol, paracetamol, apap, panadol]
+  ibuprofen: [ibuprofen, advil, motrin, nurofen, brufen]
+
+# Step 3 — posts mentioning any non-target medicine in the title or body are
+other_medicine_terms:
+  aspirin:
+    - aspirin
+    - acetylsalicylic acid
+    - asa
+    - bayer
+    - bufferin
+    - ecotrin
+    - anacin
+    - vazalore
+    - durlaza
+    - excedrin
+    - alka-seltzer
+    - alka seltzer
+    - bc powder
+    - asprin
+    - aspirine
+  naproxen:
+    - naproxen
+    - naproxen sodium
+    - aleve
+    - anaprox
+    - naprosyn
+    - naprelan
+    - vimovo
+    - treximet
+    - flanax
+    - naproxin
+    - naproxene
+    - neproxen
+  diclofenac:
+    - diclofenac
+    - diclofenac sodium
+    - diclofenac potassium
+    - voltaren
+    - voltarol
+    - cataflam
+    - cambia
+    - flector
+    - pennsaid
+    - zorvolex
+    - zipsor
+    - arthrotec
+    - dicloflenac
+    - declofenac
+    - diclofinac
+    - diklofenac
+  ketoprofen:
+    - ketoprofen
+    - orudis
+    - oruvail
+    - ketum
+  meloxicam:
+    - meloxicam
+    - mobic
+    - vivlodex
+    - qmiiz
+    - anjeso
+  celecoxib:
+    - celecoxib
+    - celebrex
+    - elyxyb
+    - celekoxib
+    - celebrax
+  diphenhydramine:
+    - diphenhydramine
+    - diphenhydramine hydrochloride
+    - diphenhydramine citrate
+    - benadryl
+    - zzzquil
+    - unisom
+    - nytol
+    - sominex
+    - simply sleep
+    - tylenol pm
+    - advil pm
+    - aleve pm
+    - benedryl
+    - bendryl
+    - bendadryl
+    - benadril
+    - dyphenhydramine
+    - dipenhydramine
+  codeine:
+    - codeine
+    - codeine phosphate
+    - co-codamol
+    - co codamol
+    - cocodamol
+    - tylenol with codeine
+    - tylenol 3
+    - "tylenol #3"
+    - robitussin ac
+    - virtussin ac
+    - cheratussin ac
+    - tuzistra xr
+    - solpadeine
+    - panadeine
+    - codine
+    - codein
+    - codiene
+  tramadol:
+    - tramadol
+    - ultram
+    - ultracet
+    - conzip
+    - qdolo
+    - tramal
+    - tramodol
+    - tramadal
+    - tramadrol
+    - tramdol
+    - trammadol
+  cough_cold_medicine:
+    - cough syrup
+    - cough syrups
+    - cough medicine
+    - cough medicines
+    - cough suppressant
+    - cough suppressants
+    - dextromethorphan
+    - dxm
+    - guaifenesin
+    - guaiphenesin
+    - benzonatate
+    - tessalon
+    - delsym
+    - robitussin
+    - mucinex
+    - musinex
+    - nyquil
+    - dayquil
+    - benylin
+    - tussin
+    - buckley's
+    - buckleys
+    - bromfed
+    - dimetapp
+    - theraflu
+    - neocitran
+    - neocitron
 
 # Step 3 — a candidate must contain at least one dosing-related term.
 dosing_terms:
