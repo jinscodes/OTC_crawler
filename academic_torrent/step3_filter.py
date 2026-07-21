@@ -30,14 +30,35 @@ _ELAPSED_OR_SCHEDULE_RE = re.compile(
 )
 _EXCLUDED_REPEAT_INTENT_RE = re.compile(
     r"\b(?:"
-    r"alcohol|beer|wine|liquor|drank|drinking|cbd|cannabis|weed|marijuana|"
-    r"interaction|mixed?\s+with|combin(?:e|ing)|"
-    r"substitut(?:e|ing)|replace|different\s+(?:drug|medicine|medication)|"
-    r"how\s+many\s+(?:mg|milligrams?|pills?|tablets?|capsules?|doses?)|"
-    r"how\s+much\s+(?!time\b)(?:acetaminophen|tylenol|paracetamol|apap|"
-    r"panadol|ibuprofen|advil|motrin|nurofen|brufen)|"
-    r"(?:increase|higher|double)\s+(?:the\s+)?dos(?:e|age)"
+    r"alcohol|beer|wine|liquor|drink|drinks|drank|drinking|drunk|hangover|"
+    r"cbd|cannabis|weed|marijuana|"
+    r"different\s+(?:drug|medicine|medication)"
     r")\b",
+    re.IGNORECASE,
+)
+_CONDITIONAL_TRANSITION_INTENT_RE = re.compile(
+    r"\b(?:mix(?:ed|ing)?\s+with|combin(?:e|ing)|substitut(?:e|ing)|"
+    r"replac(?:e|ing))\b",
+    re.IGNORECASE,
+)
+_TARGET_PAIR_REPLACEMENT_RE = re.compile(
+    r"\b(?:substitut(?:e|ing)|replac(?:e|ing))\b",
+    re.IGNORECASE,
+)
+_TARGET_PAIR_COMBINATION_RE = re.compile(
+    r"\b(?:mix(?:ed|ing)?\s+with|combin(?:e|ing))\b",
+    re.IGNORECASE,
+)
+_TARGET_PAIR_TIMING_RE = re.compile(
+    r"\b(?:"
+    r"alternat(?:e|ing)|after|before|wait|between|interval|gap|schedule|"
+    r"another|next|second|again|every\s+\d+(?:\.\d+)?\s*(?:hours?|hrs?)"
+    r")\b",
+    re.IGNORECASE,
+)
+_CONTEXTUAL_STRONG_TARGET_SWITCH_RE = re.compile(
+    r"\b(?:switch(?:ing)?|alternat(?:e|ing)|instead\s+of|"
+    r"replac(?:e|ing)|substitut(?:e|ing))\b",
     re.IGNORECASE,
 )
 
@@ -73,38 +94,42 @@ _DOSE_ACTION_SOURCE = (
     r")"
 )
 _SAFETY_SOURCE = r"(?:safe|ok(?:ay)?|alright|dangerous|recommended)"
+# Single-dose ("how much can I take") dosing questions. These broaden the scope
+# beyond repeat-dose intent to any amount/limit question about a research
+# target, while still requiring an explicit dosing question, not a bare mention.
+_DOSE_AMOUNT_UNIT_SOURCE = (
+    r"(?:mg|milligrams?|g|grams?|tablets?|pills?|caplets?|capsules?|doses?)"
+)
+_DOSING_AMOUNT_CUE_SOURCE = (
+    r"(?:take|taking|have|use|using|safe|ok(?:ay)?|alright|too\s+much|"
+    r"overdose|mg|milligrams?|grams?|dose|dosage|per\s+day|a\s+day|daily|"
+    r"at\s+once|in\s+24\s*(?:hours?|hrs?)|each\s+time|max(?:imum)?)"
+)
 _PRIOR_DOSE_VERB_SOURCE = (
     r"(?<!haven't\s)(?<!hasn't\s)(?<!hadn't\s)"
     r"(?<!not\s)(?<!never\s)"
     r"(?:took|taken|used|swallowed|ingested)"
 )
-
-_HIGH_RECALL_QUESTION_RE = re.compile(
-    rf"(?:\?|{_QUESTION_LEAD_SOURCE})",
+_CONTEXTUAL_QUESTION_RE = re.compile(
+    rf"(?:\?|{_QUESTION_LEAD_SOURCE}|"
+    r"\b(?:safe|ok(?:ay)?|alright|dangerous)\s+to\b)",
     re.IGNORECASE,
 )
-_HIGH_RECALL_REPEAT_RE = re.compile(
-    rf"\b{_REPEAT_CUE_SOURCE}\b",
+_CONTEXTUAL_ACTION_RE = re.compile(
+    rf"\b{_DOSE_ACTION_SOURCE}\b|\b(?:have|having|had|swallow(?:ed|ing)?|"
+    r"ingest(?:ed|ing)?)\b",
     re.IGNORECASE,
 )
-_HIGH_RECALL_TIME_RE = re.compile(
-    r"\b(?:"
-    r"(?:\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|"
-    r"eleven|twelve)\s*(?:minutes?|mins?|hours?|hrs?|days?)\s*ago|"
-    r"earlier|today|tonight|this\s+morning|this\s+afternoon|"
-    r"last\s+night|yesterday|wait|after|before|until|between|"
-    r"same\s+day|next\s+dose|last\s+dose|previous\s+dose"
-    r")\b",
+_CONTEXTUAL_SAFETY_RE = re.compile(
+    r"\b(?:safe|ok(?:ay)?|alright|dangerous|recommended)\b",
     re.IGNORECASE,
 )
-_HIGH_RECALL_ACTION_RE = re.compile(
-    r"\b(?:"
-    r"take|taking|took|taken|use|using|used|have|having|had|"
-    r"dose|dosage|pill|tablet|capsule|mg|milligrams?"
-    r")\b",
+_CONTEXTUAL_DECISION_RE = re.compile(
+    rf"(?:\?|{_QUESTION_LEAD_SOURCE}|"
+    r"\bdo\s+(?:i|we|you|they)\b|"
+    r"\b(?:safe|ok(?:ay)?|alright|dangerous|recommended)\b)",
     re.IGNORECASE,
 )
-
 
 def _term_source(terms: list[str]) -> str:
     """Return a longest-first, escaped alternation for medicine aliases."""
@@ -139,6 +164,111 @@ def _compile_repeat_dose_rules(
             rf"\b\d+(?:\.\d+)?\s*(?:mg|milligrams?)\b).{{0,60}}"
             rf"\b(?:ago|earlier|already|last\s+night|"
             rf"this\s+morning|yesterday|last\s+dose|previous\s+dose)\b"
+            rf")",
+            re.IGNORECASE,
+        )
+        contextual_prior_dose = re.compile(
+            rf"(?:"
+            rf"\b{_PRIOR_DOSE_VERB_SOURCE}\b.{{0,140}}{target}|"
+            rf"\b(?:i|we|he|she|they)\s+had\b.{{0,60}}{target}|"
+            rf"{target}.{{0,90}}"
+            rf"(?:\b(?:dose|tablet|pill|capsule|took|taken|used)\b|"
+            rf"\b\d+(?:\.\d+)?\s*(?:mg|milligrams?)\b).{{0,90}}"
+            rf"\b(?:ago|earlier|already|today|tonight|last\s+night|"
+            rf"this\s+morning|yesterday|last\s+dose|previous\s+dose)\b|"
+            rf"\bafter\s+{target}\b|"
+            rf"\bafter\b.{{0,30}}\b(?:taking|took|having|had|using|used)\b"
+            rf".{{0,50}}{target}"
+            rf")",
+            re.IGNORECASE,
+        )
+        contextual_explicit_repeat = re.compile(
+            rf"(?:"
+            rf"\b(?:again|re[-\s]?(?:take|dose))\b.{{0,70}}{target}|"
+            rf"{target}.{{0,70}}\b(?:again|another\s+time|one\s+more)\b|"
+            rf"\b(?:another|next|second|one\s+more)\b.{{0,55}}"
+            rf"(?:\b(?:dose|pill|tablet|capsule)\b.{{0,25}})?{target}|"
+            rf"\bmore\s+(?:(?:\d+(?:\.\d+)?\s*"
+            rf"(?:mg|milligrams?)\s+)?(?:of\s+)?)?{target}|"
+            rf"\b(?:another|next|second)\s+"
+            rf"(?:dose|pill|tablet|capsule)\b.{{0,30}}(?:of\s+)?{target}|"
+            rf"\bre[-\s]?(?:take|dose)\b.{{0,60}}{target}"
+            rf")",
+            re.IGNORECASE,
+        )
+        contextual_followup_question = re.compile(
+            rf"(?:"
+            rf"\b(?:take|have|use)\b.{{0,30}}"
+            rf"\b(?:another|next|second)\s+"
+            rf"(?:dose|pill|tablet|capsule)\b|"
+            rf"\b(?:take|have|use)\b.{{0,30}}\bone\s+more\b"
+            rf"(?:.{{0,20}}(?:{target}|"
+            rf"\b(?:dose|pill|tablet|capsule)\b))?|"
+            rf"\btake\s+more\b(?:.{{0,25}}{target})?|"
+            rf"\b(?:take|have|use)\b.{{0,45}}"
+            rf"(?:{target}|\bit\b|\bone\b).{{0,35}}"
+            rf"\b(?:again|now|today|tonight)\b|"
+            rf"\b(?:again|now|today|tonight)\b.{{0,45}}"
+            rf"\b(?:take|have|use)\b.{{0,45}}"
+            rf"(?:{target}|\bit\b|\bone\b|\bmore\b)|"
+            rf"\bwait\b.{{0,100}}"
+            rf"\b(?:another|next|second)\s+"
+            rf"(?:dose|pill|tablet|capsule)\b"
+            rf")",
+            re.IGNORECASE,
+        )
+        contextual_interval_question = re.compile(
+            rf"(?:"
+            rf"\bhow\s+(?:long|soon|many\s+hours|much\s+time)\b"
+            rf".{{0,140}}\bafter\b.{{0,90}}"
+            rf"(?:\b(?:take|taking|took|have|having|had|use|using|used)\b"
+            rf".{{0,55}})?{target}.{{0,140}}"
+            rf"\b(?:take|have|use)\b.{{0,55}}"
+            rf"(?:{target}|\bit\b|\bone\b|\bmore\b)|"
+            rf"\bhow\s+(?:long|soon|many\s+hours|much\s+time)\b"
+            rf".{{0,140}}\bwait\b.{{0,100}}\b(?:before|until)\b"
+            rf".{{0,80}}\b(?:take|have|use)\b.{{0,55}}"
+            rf"(?:{target}|\bit\b|\bone\b|\bmore\b)|"
+            rf"\b(?:gap|interval)\b.{{0,100}}\bbetween\b.{{0,80}}"
+            rf"(?:{target}.{{0,35}}\bdoses?\b|"
+            rf"\bdoses?\b.{{0,35}}{target})|"
+            rf"\bbetween\b.{{0,80}}(?:"
+            rf"{target}.{{0,35}}\bdoses?\b|"
+            rf"\bdoses?\b.{{0,35}}{target})|"
+            rf"\b{target}\b.{{0,55}}\bdoses?\s+apart\b"
+            rf")",
+            re.IGNORECASE,
+        )
+
+        dosing_amount_question = re.compile(
+            rf"(?:"
+            # how much/how many <target> ... dosing cue
+            rf"\bhow\s+(?:much|many)\b[^?.!]{{0,55}}{target}[^?.!]{{0,45}}"
+            rf"\b{_DOSING_AMOUNT_CUE_SOURCE}\b|"
+            # how much/how many ... dosing cue ... <target>
+            # (e.g. "how many mg of tylenol")
+            rf"\bhow\s+(?:much|many)\b[^?.!]{{0,25}}"
+            rf"\b{_DOSING_AMOUNT_CUE_SOURCE}\b[^?.!]{{0,45}}{target}|"
+            # max/maximum/safe/recommended dose|amount|limit of <target>
+            rf"\b(?:max(?:imum)?|safe|recommended|normal|right|correct|proper|"
+            rf"highest|daily|single)\b[^?.!]{{0,25}}"
+            rf"\b(?:dose|dosage|amount|limit)\b[^?.!]{{0,45}}{target}|"
+            rf"{target}[^?.!]{{0,45}}\b(?:max(?:imum)?|safe|recommended|highest|"
+            rf"daily|single)\b[^?.!]{{0,25}}\b(?:dose|dosage|amount|limit)\b|"
+            # can I take <N> mg/tablets (of) <target>
+            rf"{_QUESTION_LEAD_SOURCE}[^?.!]{{0,45}}"
+            rf"\b(?:take|have|use)\b[^?.!]{{0,30}}"
+            rf"\d+(?:\.\d+)?\s*{_DOSE_AMOUNT_UNIT_SOURCE}"
+            rf"[^?.!]{{0,25}}(?:of\s+)?{target}|"
+            # is <N> mg (of) <target> too much/safe
+            rf"\bis\b[^?.!]{{0,20}}\d+(?:\.\d+)?\s*{_DOSE_AMOUNT_UNIT_SOURCE}"
+            rf"[^?.!]{{0,25}}(?:of\s+)?{target}[^?.!]{{0,45}}"
+            rf"\b(?:safe|too\s+much|ok(?:ay)?|alright|fine|enough|dangerous|"
+            rf"overdose)\b|"
+            # <target> ... is <N> mg too much/safe (target stated first)
+            rf"{target}[^?.!]{{0,30}}\bis\b[^?.!]{{0,20}}"
+            rf"\d+(?:\.\d+)?\s*{_DOSE_AMOUNT_UNIT_SOURCE}[^?.!]{{0,35}}"
+            rf"\b(?:safe|too\s+much|ok(?:ay)?|alright|fine|enough|dangerous)\b"
             rf")",
             re.IGNORECASE,
         )
@@ -357,6 +487,11 @@ def _compile_repeat_dose_rules(
             "aliases": re.compile(target, re.IGNORECASE),
             "alias_source": target,
             "prior_dose": prior_dose,
+            "contextual_prior_dose": contextual_prior_dose,
+            "contextual_explicit_repeat": contextual_explicit_repeat,
+            "contextual_followup_question": contextual_followup_question,
+            "contextual_interval_question": contextual_interval_question,
+            "dosing_amount_question": dosing_amount_question,
             "explicit_rules": explicit_rules,
             "implicit_rules": implicit_rules,
         }
@@ -383,6 +518,27 @@ def _compile_repeat_dose_rules(
                             rf"\bswitch(?:ing)?\s+from\s+{source}"
                             rf"\s+to\s+{destination}\b|"
                             rf"\bis\s+switching\s+from\s+{source}\s+to\s+"
+                            rf"{destination}.{{0,50}}\b{_SAFETY_SOURCE}\b"
+                            rf")",
+                            re.IGNORECASE,
+                        ),
+                    ),
+                    (
+                        target_medicine,
+                        "replace_between_target_medicines",
+                        re.compile(
+                            rf"(?:"
+                            rf"{_QUESTION_LEAD_SOURCE}[^?]{{0,100}}"
+                            rf"\breplac(?:e|ing)\b.{{0,35}}{source}"
+                            rf".{{0,25}}\bwith\b.{{0,25}}{destination}|"
+                            rf"{_QUESTION_LEAD_SOURCE}[^?]{{0,100}}"
+                            rf"\bsubstitut(?:e|ing)\b.{{0,35}}{source}"
+                            rf".{{0,25}}\bwith\b.{{0,25}}{destination}|"
+                            rf"{_QUESTION_LEAD_SOURCE}[^?]{{0,100}}"
+                            rf"\bsubstitut(?:e|ing)\b.{{0,35}}{destination}"
+                            rf".{{0,25}}\bfor\b.{{0,25}}{source}|"
+                            rf"\bis\b[^?]{{0,50}}\breplacing\b.{{0,35}}"
+                            rf"{source}.{{0,25}}\bwith\b.{{0,25}}"
                             rf"{destination}.{{0,50}}\b{_SAFETY_SOURCE}\b"
                             rf")",
                             re.IGNORECASE,
@@ -465,12 +621,51 @@ def _compile_repeat_dose_rules(
     return compiled
 
 
-def _sentence_windows(title: str, body: str) -> list[str]:
-    """Return unique one- and two-sentence windows, including title context."""
+def _target_medicines_in(
+    text: str,
+    compiled_rules: dict[str, dict],
+) -> list[str]:
+    return [
+        medicine
+        for medicine, rules in compiled_rules.items()
+        if rules["aliases"].search(text)
+    ]
+
+
+def _has_excluded_repeat_intent(
+    text: str,
+    compiled_rules: dict[str, dict],
+) -> bool:
+    """Reject out-of-scope intent while allowing target-to-target wording."""
+    if _EXCLUDED_REPEAT_INTENT_RE.search(text):
+        return True
+    if not _CONDITIONAL_TRANSITION_INTENT_RE.search(text):
+        return False
+
+    target_medicines = _target_medicines_in(text, compiled_rules)
+    if len(target_medicines) < 2:
+        return True
+    if _TARGET_PAIR_REPLACEMENT_RE.search(text):
+        return False
+    if (
+        _TARGET_PAIR_COMBINATION_RE.search(text)
+        and _TARGET_PAIR_TIMING_RE.search(text)
+    ):
+        return False
+    return True
+
+
+def _sentence_units(title: str, body: str) -> list[str]:
     units = [title.strip()] if title.strip() else []
     units.extend(
         part.strip() for part in _SENTENCE_SPLIT_RE.split(body) if part.strip()
     )
+    return units
+
+
+def _sentence_windows(title: str, body: str) -> list[str]:
+    """Return unique one- and two-sentence windows, including title context."""
+    units = _sentence_units(title, body)
     windows: list[str] = []
     seen: set[str] = set()
     for index, unit in enumerate(units):
@@ -491,6 +686,347 @@ def _context_around(text: str, start: int, end: int, radius: int = 220) -> str:
     return text[max(0, start - radius):min(len(text), end + radius)].strip()
 
 
+def _local_question_windows_for_other_medicines(
+    title: str,
+    body: str,
+) -> list[tuple[str, str]]:
+    """Return local question context used only for other-medicine roles."""
+    units = _sentence_units(title, body)
+    windows: list[tuple[str, str]] = []
+    for index, question_text in enumerate(units):
+        if not _CONTEXTUAL_QUESTION_RE.search(question_text):
+            continue
+        if index == 0:
+            context_units = units[:3]
+            context = " ".join(context_units)[:650]
+            local_question = question_text[:650]
+        else:
+            context_units = units[max(0, index - 2):index + 1]
+            context = " ".join(context_units)[-650:]
+            local_question = question_text[-650:]
+        windows.append((local_question, context))
+    return windows
+
+
+def _contextual_question_windows(
+    title: str,
+    body: str,
+) -> list[tuple[str, str]]:
+    """Return every question unit paired with the full post context."""
+    units = _sentence_units(title, body)
+    context = " ".join(units)
+    return [
+        (question_text, context)
+        for question_text in units
+        if _CONTEXTUAL_QUESTION_RE.search(question_text)
+    ]
+
+
+def _other_medicines_in_question_context(
+    title: str,
+    body: str,
+    other_medicine_patterns: dict[str, re.Pattern],
+    compiled_rules: dict[str, dict],
+) -> list[str]:
+    """Find non-target medicines used as the asked-about or prior medicine."""
+    matched: set[str] = set()
+    for question_text, context in (
+        _local_question_windows_for_other_medicines(title, body)
+    ):
+        if not _target_medicines_in(context, compiled_rules):
+            continue
+        for medicine, pattern in other_medicine_patterns.items():
+            if pattern.search(question_text):
+                matched.add(medicine)
+                continue
+            for item in pattern.finditer(context):
+                prefix = context[max(0, item.start() - 120):item.start()]
+                if re.search(
+                    r"\b(?:took|taken|used|swallowed|ingested|had)\b",
+                    prefix,
+                    re.IGNORECASE,
+                ):
+                    matched.add(medicine)
+                    break
+                neighborhood = context[
+                    max(0, item.start() - 100):min(
+                        len(context),
+                        item.end() + 100,
+                    )
+                ]
+                if re.search(
+                    r"\b(?:switch(?:ing)?|replac(?:e|ing)|"
+                    r"substitut(?:e|ing)|instead\s+of|mix(?:ed|ing)?\s+with|"
+                    r"combin(?:e|ing))\b",
+                    neighborhood,
+                    re.IGNORECASE,
+                ):
+                    matched.add(medicine)
+                    break
+    return sorted(matched)
+
+
+def _contextual_transition(
+    text: str,
+    compiled_rules: dict[str, dict],
+) -> tuple[str, str] | None:
+    """Infer source and destination targets from their order in local text."""
+    occurrences: list[tuple[int, str]] = []
+    for medicine, rules in compiled_rules.items():
+        occurrences.extend(
+            (match.start(), medicine)
+            for match in rules["aliases"].finditer(text)
+        )
+    occurrences.sort()
+    ordered: list[str] = []
+    for _, medicine in occurrences:
+        if not ordered or ordered[-1] != medicine:
+            ordered.append(medicine)
+    if len(set(ordered)) < 2:
+        return None
+    return ordered[0], ordered[-1]
+
+
+def _post_level_target_for_question(
+    question_text: str,
+    context: str,
+    compiled_rules: dict[str, dict],
+) -> str | None:
+    """Choose the nearest post-level target when the question omits its name."""
+    question_start = context.rfind(question_text)
+    if question_start < 0:
+        question_start = len(context)
+
+    occurrences: list[tuple[int, str]] = []
+    for medicine, rules in compiled_rules.items():
+        occurrences.extend(
+            (match.start(), medicine)
+            for match in rules["aliases"].finditer(context)
+        )
+    if not occurrences:
+        return None
+
+    before_question = [
+        item for item in occurrences if item[0] < question_start
+    ]
+    if before_question:
+        return max(before_question)[1]
+    return min(occurrences)[1]
+
+
+def _has_direct_target_pair_transition(
+    question_text: str,
+    compiled_rules: dict[str, dict],
+) -> bool:
+    if len(_target_medicines_in(question_text, compiled_rules)) < 2:
+        return False
+    if _CONTEXTUAL_STRONG_TARGET_SWITCH_RE.search(question_text):
+        return True
+    if (
+        _TARGET_PAIR_COMBINATION_RE.search(question_text)
+        and _TARGET_PAIR_TIMING_RE.search(question_text)
+    ):
+        return True
+
+    occurrences: list[tuple[int, int, str]] = []
+    for medicine, rules in compiled_rules.items():
+        occurrences.extend(
+            (match.start(), match.end(), medicine)
+            for match in rules["aliases"].finditer(question_text)
+        )
+    occurrences.sort()
+    for left, right in zip(occurrences, occurrences[1:]):
+        if left[2] == right[2]:
+            continue
+        between = question_text[left[1]:right[0]]
+        if re.search(
+            r"\b(?:after|before|then)\b",
+            between,
+            re.IGNORECASE,
+        ):
+            return True
+
+    aliases = [
+        rules["alias_source"]
+        for rules in compiled_rules.values()
+    ]
+    if len(aliases) >= 2:
+        for first in aliases:
+            for second in aliases:
+                if first == second:
+                    continue
+                if re.search(
+                    rf"\bbetween\b.{{0,80}}{first}.{{0,45}}"
+                    rf"(?:and|with)\s+{second}",
+                    question_text,
+                    re.IGNORECASE,
+                ):
+                    return True
+    return False
+
+
+def find_contextual_repeat_dose_question(
+    title: str,
+    body: str,
+    compiled_rules: dict[str, dict],
+) -> tuple[dict | None, bool]:
+    """
+    High-recall fallback using local signals instead of a fixed word order.
+
+    It still requires a target-linked question plus either an explicit repeat
+    cue, a target-specific prior dose, a dose interval, or a transition between
+    the two configured research targets.
+    """
+    rejected_intent = False
+    for question_text, context in _contextual_question_windows(title, body):
+        if _has_excluded_repeat_intent(context, compiled_rules):
+            rejected_intent = True
+            continue
+
+        context_medicines = _target_medicines_in(context, compiled_rules)
+        if not context_medicines:
+            continue
+
+        question_medicines = _target_medicines_in(
+            question_text,
+            compiled_rules,
+        )
+        post_level_target = _post_level_target_for_question(
+            question_text,
+            context,
+            compiled_rules,
+        )
+        transition = None
+        if (
+            len(question_medicines) >= 2
+            and _has_direct_target_pair_transition(
+                question_text,
+                compiled_rules,
+            )
+        ):
+            transition = _contextual_transition(
+                question_text,
+                compiled_rules,
+            )
+        elif len(question_medicines) == 1:
+            destination = question_medicines[0]
+            destination_rules = compiled_rules[destination]
+            if destination_rules["contextual_followup_question"].search(
+                question_text
+            ):
+                source = next(
+                    (
+                        medicine
+                        for medicine in context_medicines
+                        if medicine != destination
+                        and compiled_rules[medicine][
+                            "contextual_prior_dose"
+                        ].search(context)
+                    ),
+                    None,
+                )
+                if source is not None:
+                    transition = source, destination
+
+        if transition is not None:
+            source_medicine, target_medicine = transition
+            source_rules = compiled_rules[source_medicine]
+            target_rules = compiled_rules[target_medicine]
+            return {
+                "target_medicine": target_medicine,
+                "source_medicine": source_medicine,
+                "target_medicines": [
+                    source_medicine,
+                    target_medicine,
+                ],
+                "transition": (
+                    f"{source_medicine}_to_{target_medicine}"
+                ),
+                "rule_id": "contextual_target_switch",
+                "prior_dose_text": None,
+                "time_expressions": cfg.find_all_matches(
+                    _TIME_RE, context
+                ),
+                "source_terms": cfg.find_all_matches(
+                    source_rules["aliases"], context
+                ),
+                "target_terms": cfg.find_all_matches(
+                    target_rules["aliases"], context
+                ),
+                "question_text": question_text,
+                "context_text": context,
+            }, rejected_intent
+
+        question_has_action = bool(
+            _CONTEXTUAL_ACTION_RE.search(question_text)
+        )
+        for medicine in context_medicines:
+            rules = compiled_rules[medicine]
+            question_has_target = bool(
+                rules["aliases"].search(question_text)
+            )
+            prior = rules["contextual_prior_dose"].search(context)
+            explicit_repeat = rules["contextual_explicit_repeat"].search(
+                question_text
+            )
+
+            if (
+                question_has_target
+                and explicit_repeat is not None
+                and _CONTEXTUAL_DECISION_RE.search(question_text)
+                and (
+                    question_has_action
+                    or _CONTEXTUAL_SAFETY_RE.search(question_text)
+                )
+            ):
+                rule_id = "contextual_explicit_repeat_question"
+            elif (
+                rules["contextual_interval_question"].search(
+                    question_text
+                )
+            ):
+                rule_id = "contextual_dose_interval_question"
+            elif (
+                prior is not None
+                and (
+                    followup := rules[
+                        "contextual_followup_question"
+                    ].search(question_text)
+                )
+                and (
+                    context.rfind(question_text) + followup.start()
+                    >= prior.end()
+                )
+            ):
+                rule_id = "contextual_prior_dose_followup"
+            elif (
+                not question_medicines
+                and medicine == post_level_target
+                and rules["contextual_followup_question"].search(
+                    question_text
+                )
+            ):
+                rule_id = "contextual_post_level_repeat_question"
+            else:
+                continue
+
+            return {
+                "target_medicine": medicine,
+                "rule_id": rule_id,
+                "prior_dose_text": (
+                    prior.group().strip() if prior is not None else None
+                ),
+                "time_expressions": cfg.find_all_matches(_TIME_RE, context),
+                "target_terms": cfg.find_all_matches(
+                    rules["aliases"], context
+                ),
+                "question_text": question_text,
+                "context_text": context,
+            }, rejected_intent
+
+    return None, rejected_intent
+
+
 def find_repeat_dose_question(
     title: str,
     body: str,
@@ -505,7 +1041,7 @@ def find_repeat_dose_question(
     """
     # The title normally states the question's intent. Rejecting these intents
     # up front prevents a later body-only window from bypassing the title.
-    if _EXCLUDED_REPEAT_INTENT_RE.search(title):
+    if _has_excluded_repeat_intent(title, compiled_rules):
         return None, "excluded_repeat_intent"
 
     rejected_intent = False
@@ -518,7 +1054,7 @@ def find_repeat_dose_question(
                 if not match:
                     continue
                 context = _context_around(window, match.start(), match.end())
-                if _EXCLUDED_REPEAT_INTENT_RE.search(context):
+                if _has_excluded_repeat_intent(context, compiled_rules):
                     rejected_intent = True
                     continue
                 target_rules = compiled_rules[target_medicine]
@@ -579,7 +1115,7 @@ def find_repeat_dose_question(
                     if not first_dose_sequence:
                         continue
                 context = _context_around(window, match.start(), match.end())
-                if _EXCLUDED_REPEAT_INTENT_RE.search(context):
+                if _has_excluded_repeat_intent(context, compiled_rules):
                     rejected_intent = True
                     continue
                 time_terms = cfg.find_all_matches(_TIME_RE, context)
@@ -614,7 +1150,7 @@ def find_repeat_dose_question(
                 if prior is None:
                     continue
                 context = _context_around(window, prior.start(), match.end())
-                if _EXCLUDED_REPEAT_INTENT_RE.search(context):
+                if _has_excluded_repeat_intent(context, compiled_rules):
                     rejected_intent = True
                     continue
                 return {
@@ -629,90 +1165,54 @@ def find_repeat_dose_question(
                     "context_text": context,
                 }, "matched"
 
+    contextual_evidence, contextual_rejected = (
+        find_contextual_repeat_dose_question(
+            title,
+            body,
+            compiled_rules,
+        )
+    )
+    if contextual_evidence is not None:
+        return contextual_evidence, "matched"
+    rejected_intent = rejected_intent or contextual_rejected
     reason = "excluded_repeat_intent" if rejected_intent else "no_repeat_question"
     return None, reason
 
 
-def _high_recall_signals(text: str) -> dict[str, list[str]]:
-    """Return the broad, auditable signals used by the medium-confidence tier."""
-    return {
-        "question": cfg.find_all_matches(_HIGH_RECALL_QUESTION_RE, text),
-        "action": cfg.find_all_matches(_HIGH_RECALL_ACTION_RE, text),
-        "repeat": cfg.find_all_matches(_HIGH_RECALL_REPEAT_RE, text),
-        "time": cfg.find_all_matches(_HIGH_RECALL_TIME_RE, text),
-    }
-
-
-def find_high_recall_candidate(
+def find_dosing_amount_question(
     title: str,
     body: str,
     compiled_rules: dict[str, dict],
-) -> tuple[dict | None, str]:
+) -> dict | None:
     """
-    Find a medium-confidence candidate using a recall-oriented signal bundle.
+    Find a single-dose amount/limit question about a research target.
 
-    A two-sentence window must contain a research target, a dosing action, a
-    question signal, and at least one repeat or time signal. The exact grammar
-    is intentionally flexible; downstream records retain every matched signal
-    so this lower-precision tier remains auditable.
+    This is a scope-broadening fallback used only after the repeat-dose rules
+    fail. It keeps "how much X can I take", "max dose of X", and "is N mg of X
+    too much" style questions that do not describe a prior dose. Off-topic
+    intent (alcohol/cbd/mixing) is still rejected, and a non-target medicine
+    used as the question subject is filtered downstream in ``filter_batch``.
     """
-    if _EXCLUDED_REPEAT_INTENT_RE.search(title):
-        return None, "excluded_repeat_intent"
-
-    rejected_intent = False
+    if _has_excluded_repeat_intent(title, compiled_rules):
+        return None
     for window in _sentence_windows(title, body):
-        matched_targets = []
         for medicine, rules in compiled_rules.items():
-            matches = list(rules["aliases"].finditer(window))
-            if matches:
-                matched_targets.append((medicine, rules, matches))
-        if not matched_targets:
-            continue
-
-        signals = _high_recall_signals(window)
-        if (
-            not signals["question"]
-            or not signals["action"]
-            or (not signals["repeat"] and not signals["time"])
-        ):
-            continue
-
-        if _EXCLUDED_REPEAT_INTENT_RE.search(window):
-            rejected_intent = True
-            continue
-
-        signal_matches = list(_HIGH_RECALL_ACTION_RE.finditer(window))
-        signal_matches.extend(_HIGH_RECALL_REPEAT_RE.finditer(window))
-        signal_matches.extend(_HIGH_RECALL_TIME_RE.finditer(window))
-
-        def distance_to_signal(item) -> int:
-            _, _, medicine_matches = item
-            return min(
-                abs(medicine_match.start() - signal_match.start())
-                for medicine_match in medicine_matches
-                for signal_match in signal_matches
-            )
-
-        matched_targets.sort(key=distance_to_signal)
-        medicine, rules, _ = matched_targets[0]
-        target_medicines = [item[0] for item in matched_targets]
-        score = 0.75 if signals["repeat"] and signals["time"] else 0.65
-        return {
-            "target_medicine": medicine,
-            "target_medicines": target_medicines,
-            "rule_id": "high_recall_signal_combination",
-            "confidence": "medium",
-            "candidate_score": score,
-            "prior_dose_text": None,
-            "time_expressions": signals["time"],
-            "target_terms": cfg.find_all_matches(rules["aliases"], window),
-            "matched_signals": signals,
-            "question_text": window,
-            "context_text": window,
-        }, "matched"
-
-    reason = "excluded_repeat_intent" if rejected_intent else "no_repeat_question"
-    return None, reason
+            match = rules["dosing_amount_question"].search(window)
+            if not match:
+                continue
+            context = _context_around(window, match.start(), match.end())
+            if _has_excluded_repeat_intent(context, compiled_rules):
+                continue
+            return {
+                "target_medicine": medicine,
+                "rule_id": "dosing_amount_question",
+                "prior_dose_text": None,
+                "time_expressions": cfg.find_all_matches(_TIME_RE, context),
+                "target_terms": cfg.find_all_matches(rules["aliases"], context),
+                "question_text": match.group().strip(),
+                "context_text": context,
+            }
+    return None
 
 
 def filter_batch(
@@ -723,12 +1223,12 @@ def filter_batch(
     medicine_terms: dict[str, list[str]] | None = None,
 ) -> tuple[list[dict], dict]:
     """
-    Apply the other-medicine, off-topic, and repeat-dose intent filters.
+    Apply the off-topic, repeat-dose intent, and contextual medicine filters.
 
-    Strict deterministic matches are retained as high-confidence candidates.
-    A broad signal bundle adds medium-confidence candidates for high-recall
-    collection. `dosing_terms` remains descriptive evidence and is not, by
-    itself, sufficient to qualify a post.
+    A post qualifies when either a strict deterministic rule or the local
+    contextual fallback links a research target to an eligible re-dosing or
+    target-switch question. `dosing_terms` remains descriptive evidence and is
+    not, by itself, sufficient.
     """
     dosing_re = cfg.build_pattern(dosing_terms)
     exclude_re = cfg.build_pattern(exclude_terms)
@@ -737,6 +1237,8 @@ def filter_batch(
         or {
             "acetaminophen": [
                 "acetaminophen",
+                "acetominophen",
+                "acetaminaphen",
                 "tylenol",
                 "paracetamol",
                 "apap",
@@ -744,6 +1246,9 @@ def filter_batch(
             ],
             "ibuprofen": [
                 "ibuprofen",
+                "ibuprophen",
+                "ibufrofen",
+                "ibufrofin",
                 "advil",
                 "motrin",
                 "nurofen",
@@ -763,7 +1268,6 @@ def filter_batch(
     by_other_medicine: dict[str, int] = {}
     by_medicine: dict[str, int] = {}
     by_repeat_dose_rule: dict[str, int] = {}
-    by_confidence: dict[str, int] = {}
 
     for post in posts:
         title = post.get("title_clean")
@@ -774,55 +1278,67 @@ def filter_batch(
             body = post.get("body", "") or ""
         text = post.get("clean_text") or f"{title} {body}"
 
-        matched_other_medicines = [
-            medicine
-            for medicine, pattern in other_medicine_patterns.items()
-            if pattern.search(title) or pattern.search(body)
-        ]
-        if matched_other_medicines:
-            flagged_other_medicine += 1
-            for medicine in matched_other_medicines:
-                by_other_medicine[medicine] = (
-                    by_other_medicine.get(medicine, 0) + 1
-                )
-            continue
-
         if exclude_re.search(text):
             flagged_excluded += 1
+            continue
+
+        matched_question_medicines = _other_medicines_in_question_context(
+            title,
+            body,
+            other_medicine_patterns,
+            repeat_dose_rules,
+        )
+        if matched_question_medicines:
+            flagged_other_medicine += 1
+            for other_medicine in matched_question_medicines:
+                by_other_medicine[other_medicine] = (
+                    by_other_medicine.get(other_medicine, 0) + 1
+                )
             continue
 
         repeat_evidence, rejection_reason = find_repeat_dose_question(
             title, body, repeat_dose_rules
         )
-        confidence = "high"
-        candidate_score = 1.0
         if repeat_evidence is None:
             if rejection_reason == "excluded_repeat_intent":
                 flagged_excluded_intent += 1
                 continue
-
-            repeat_evidence, rejection_reason = find_high_recall_candidate(
+            # Scope broadened: also keep single-dose amount/limit questions that
+            # do not describe a prior dose (e.g. "how much X can I take?").
+            repeat_evidence = find_dosing_amount_question(
                 title, body, repeat_dose_rules
             )
             if repeat_evidence is None:
-                if rejection_reason == "excluded_repeat_intent":
-                    flagged_excluded_intent += 1
-                else:
-                    no_repeat_dose_question += 1
+                no_repeat_dose_question += 1
                 continue
-            confidence = "medium"
-            candidate_score = repeat_evidence["candidate_score"]
-        else:
-            repeat_evidence["confidence"] = confidence
-            repeat_evidence["candidate_score"] = candidate_score
-            repeat_evidence["matched_signals"] = _high_recall_signals(
-                repeat_evidence.get("context_text", "")
+
+        # Ignore unrelated medicines elsewhere in a long history or medication
+        # list. Reject them only when they participate in the matched question
+        # or in the prior-dose event used to resolve an unnamed follow-up.
+        medicine_role_text = " ".join(
+            part
+            for part in (
+                repeat_evidence.get("question_text"),
+                repeat_evidence.get("prior_dose_text"),
             )
+            if part
+        )
+        matched_other_medicines = [
+            other_medicine
+            for other_medicine, pattern in other_medicine_patterns.items()
+            if pattern.search(medicine_role_text)
+        ]
+        if matched_other_medicines:
+            flagged_other_medicine += 1
+            for other_medicine in matched_other_medicines:
+                by_other_medicine[other_medicine] = (
+                    by_other_medicine.get(other_medicine, 0) + 1
+                )
+            continue
 
         dosing_matches = cfg.find_all_matches(dosing_re, text)
         medicine = repeat_evidence["target_medicine"]
         by_medicine[medicine] = by_medicine.get(medicine, 0) + 1
-        by_confidence[confidence] = by_confidence.get(confidence, 0) + 1
         rule_id = repeat_evidence["rule_id"]
         by_repeat_dose_rule[rule_id] = by_repeat_dose_rule.get(rule_id, 0) + 1
 
@@ -830,9 +1346,6 @@ def filter_batch(
         candidate["matched_dosing_terms"] = dosing_matches
         candidate["medicine_category"] = medicine
         candidate["repeat_dose_evidence"] = repeat_evidence
-        candidate["candidate_confidence"] = confidence
-        candidate["candidate_score"] = candidate_score
-        candidate["matched_signals"] = repeat_evidence["matched_signals"]
         candidate["filter_status"] = "repeat_dose_candidate"
         candidates.append(candidate)
 
@@ -844,9 +1357,20 @@ def filter_batch(
         "no_repeat_dose_question": no_repeat_dose_question,
         "by_medicine": by_medicine,
         "by_repeat_dose_rule": by_repeat_dose_rule,
-        "by_confidence": by_confidence,
     }
     return candidates, stats
+
+
+def prepare_candidate_for_storage(candidate: dict) -> dict:
+    """Remove filter-only metadata from a candidate before Step 3 persistence."""
+    stored = dict(candidate)
+    for field in (
+        "medicine_category",
+        "repeat_dose_evidence",
+        "filter_status",
+    ):
+        stored.pop(field, None)
+    return stored
 
 
 def filter_one(subreddit: str) -> dict:
@@ -892,7 +1416,6 @@ def filter_one(subreddit: str) -> dict:
     by_other_medicine: dict[str, int] = {}
     by_medicine: dict[str, int] = {}
     by_repeat_dose_rule: dict[str, int] = {}
-    by_confidence: dict[str, int] = {}
     for recs, st in batch_results:
         candidates.extend(recs)
         flagged_other_medicine += st["flagged_other_medicine"]
@@ -907,10 +1430,12 @@ def filter_one(subreddit: str) -> dict:
             by_repeat_dose_rule[rule_id] = (
                 by_repeat_dose_rule.get(rule_id, 0) + n
             )
-        for confidence, n in st["by_confidence"].items():
-            by_confidence[confidence] = by_confidence.get(confidence, 0) + n
 
-    cfg.write_json(cfg.step_path(cfg.DIR_STEP3, subreddit), candidates)
+    stored_candidates = [
+        prepare_candidate_for_storage(candidate)
+        for candidate in candidates
+    ]
+    cfg.write_json(cfg.step_path(cfg.DIR_STEP3, subreddit), stored_candidates)
 
     stats = {
         "input":                    len(posts),
@@ -922,7 +1447,6 @@ def filter_one(subreddit: str) -> dict:
         "candidates":               len(candidates),
         "by_medicine":              by_medicine,
         "by_repeat_dose_rule":      by_repeat_dose_rule,
-        "by_confidence":             by_confidence,
     }
     cfg.update_summary(subreddit, "step3_filter", stats)
     print(f"[step3] r/{subreddit}: {len(candidates):,} candidates / {len(posts):,}")

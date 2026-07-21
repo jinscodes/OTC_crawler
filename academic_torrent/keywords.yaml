@@ -1,9 +1,26 @@
-# Step 1 — a post must mention at least one of these medicines (matched by any
+# Step 1 — a post must mention at least one of these medicine aliases.
 medicine_terms:
-  acetaminophen: [acetaminophen, tylenol, paracetamol, apap, panadol]
-  ibuprofen: [ibuprofen, advil, motrin, nurofen, brufen]
+  acetaminophen:
+    - acetaminophen
+    - acetominophen
+    - acetaminaphen
+    - tylenol
+    - paracetamol
+    - apap
+    - panadol
+  ibuprofen:
+    - ibuprofen
+    - ibuprophen
+    - ibufrofen
+    - ibufrofin
+    - advil
+    - motrin
+    - nurofen
+    - brufen
 
-# Step 3 — posts mentioning any non-target medicine in the title or body are
+# Step 3 — a non-target medicine excludes a post only when it participates in
+# the matched question or prior-dose event. Incidental history mentions outside
+# that local context do not exclude the post.
 other_medicine_terms:
   aspirin:
     - aspirin
@@ -146,7 +163,8 @@ other_medicine_terms:
     - neocitran
     - neocitron
 
-# Step 3 — a candidate must contain at least one dosing-related term.
+# Step 3 — these terms are stored as supporting evidence only. Contextual
+# repeat-dose rules, not this list alone, decide eligibility.
 dosing_terms:
   - can I take
   - can I take more

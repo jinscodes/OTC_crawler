@@ -12,8 +12,8 @@ can also be run independently (python stepN_*.py).
   Step 4  LLM annotation  — step4_llm_annotation.py  (not implemented yet)
   Step 5  review/export   — step5_export.py          (not implemented yet)
 
-After the implemented steps, an aggregate summary is written to
-output/without_api/crawl_summary.json.
+After the implemented steps, aggregate summaries are written to
+output/summary/comprehensive.json and output/crawl_summary.json.
 
 Run:  python crawling_reddit.py
 """
@@ -32,30 +32,17 @@ RUN_EXPORT         = False   # step 5 — off until implemented
 
 
 def write_aggregate(subreddits: list[str]) -> None:
-    """Collect each subreddit's crawl_summary.json into one aggregate file."""
-    per_subreddit = []
-    total_all = total_candidates = 0
-    for subreddit in subreddits:
-        summary = cfg.read_json(cfg.step_path(cfg.DIR_SUMMARY, subreddit), default=None)
-        if not summary:
-            continue
-        per_subreddit.append(summary)
-        steps = summary.get("steps", {})
-        total_all        += steps.get("step1_extract", {}).get("kept_all", 0)
-        total_candidates += steps.get("step3_filter", {}).get("candidates", 0)
-
-    aggregate = {
-        "crawl_timestamp":      cfg.now_iso(),
-        "date_range":           {"start_year": cfg.START_YEAR, "end_year": cfg.END_YEAR},
-        "subreddits_processed": [s["subreddit"] for s in per_subreddit],
-        "total_posts_all":      total_all,
-        "total_candidates":     total_candidates,
-        "per_subreddit":        per_subreddit,
-    }
+    """Refresh both the summary-folder aggregate and legacy root aggregate."""
+    aggregate = cfg.write_comprehensive_summary(subreddits)
     os.makedirs(cfg.OUTPUT_BASE, exist_ok=True)
     cfg.write_json(os.path.join(cfg.OUTPUT_BASE, "crawl_summary.json"), aggregate)
-    print(f"\nPipeline complete — "
-          f"posts_all={total_all:,}  candidates={total_candidates:,}")
+    steps = aggregate["posts_by_step"]
+    print(
+        "\nPipeline complete — "
+        f"step1={steps['step1_extract']:,}  "
+        f"step2={steps['step2_clean']:,}  "
+        f"step3={steps['step3_filter']:,}"
+    )
 
 
 def run_pipeline() -> None:

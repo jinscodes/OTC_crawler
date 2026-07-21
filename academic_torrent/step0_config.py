@@ -42,12 +42,14 @@ CONFIG_FILE     = os.path.join(BASE_DIR, "pipeline_config.yaml")
 #   step3_filter/{subreddit}.json
 #   step4_llm_annotation/{subreddit}.json   (future)
 #   summary/{subreddit}.json                (per-subreddit stats, all steps)
+#   summary/comprehensive.json              (combined stats for all subreddits)
 #   crawl_summary.json                      (aggregate)
 DIR_STEP1   = "step1_extract"      # step 1 output
 DIR_STEP2   = "step2_clean"        # step 2 output
 DIR_STEP3   = "step3_filter"       # step 3 output
 DIR_STEP4   = "step4_llm_annotation"  # step 4 output (future)
 DIR_SUMMARY = "summary"            # per-subreddit summaries
+COMPREHENSIVE_SUMMARY_FILE = "comprehensive.json"
 
 # ── Config loading ───────────────────────────────────────────────────────────
 
@@ -100,7 +102,7 @@ def chunked(items: list, size: int):
         yield items[i:i + size]
 
 START_YEAR = _DATE_RANGE.get("start_year", 2017)
-END_YEAR   = _DATE_RANGE.get("end_year", 2021)
+END_YEAR   = _DATE_RANGE.get("end_year", 2025)
 START_TS = int(datetime(START_YEAR, 1, 1, tzinfo=timezone.utc).timestamp())
 END_TS   = int(datetime(END_YEAR, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp())
 
@@ -154,6 +156,64 @@ def write_json(path: str, data) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def build_comprehensive_summary(
+    subreddits: list[str] | None = None,
+) -> dict:
+    """Combine all available per-subreddit summaries into one document."""
+    configured = subreddits or load_subreddits()
+    per_subreddit = []
+    missing = []
+    total_posts_all = 0
+    total_posts_cleaned = 0
+    total_candidates = 0
+
+    summary_dir = os.path.join(OUTPUT_BASE, DIR_SUMMARY)
+    for subreddit in configured:
+        summary_path = os.path.join(summary_dir, f"{subreddit}.json")
+        summary = read_json(summary_path, default=None)
+        if not summary:
+            missing.append(subreddit)
+            continue
+
+        per_subreddit.append(summary)
+        steps = summary.get("steps", {})
+        total_posts_all += steps.get("step1_extract", {}).get("kept_all", 0)
+        total_posts_cleaned += steps.get("step2_clean", {}).get("kept", 0)
+        total_candidates += steps.get("step3_filter", {}).get("candidates", 0)
+
+    included = [summary["subreddit"] for summary in per_subreddit]
+    # A lean rollup: just the headline totals. Per-subreddit detail already
+    # lives in each summary/{subreddit}.json, so it is not duplicated here.
+    return {
+        "generated_at": now_iso(),
+        "date_range": {
+            "start_year": START_YEAR,
+            "end_year": END_YEAR,
+        },
+        "subreddits": len(included),
+        "subreddits_missing_summary": missing,
+        "posts_by_step": {
+            "step1_extract": total_posts_all,
+            "step2_clean": total_posts_cleaned,
+            "step3_filter": total_candidates,
+        },
+    }
+
+
+def write_comprehensive_summary(
+    subreddits: list[str] | None = None,
+) -> dict:
+    """Write summary/comprehensive.json and return the combined document."""
+    comprehensive = build_comprehensive_summary(subreddits)
+    summary_dir = os.path.join(OUTPUT_BASE, DIR_SUMMARY)
+    os.makedirs(summary_dir, exist_ok=True)
+    write_json(
+        os.path.join(summary_dir, COMPREHENSIVE_SUMMARY_FILE),
+        comprehensive,
+    )
+    return comprehensive
+
+
 def update_summary(subreddit: str, step_key: str, stats: dict) -> None:
     """
     Read the per-subreddit summary (summary/{subreddit}.json), merge in this
@@ -169,6 +229,7 @@ def update_summary(subreddit: str, step_key: str, stats: dict) -> None:
     summary.setdefault("steps", {})[step_key] = stats
     summary["updated_at"] = now_iso()
     write_json(summary_path, summary)
+    write_comprehensive_summary()
 
 
 if __name__ == "__main__":

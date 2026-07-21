@@ -101,13 +101,6 @@ class RepeatDoseFilterTests(unittest.TestCase):
             ["1", "2", "3", "4"],
         )
         self.assertEqual(candidates[0]["medicine_category"], "ibuprofen")
-        self.assertTrue(
-            all(
-                post["candidate_confidence"] == "high"
-                and post["candidate_score"] == 1.0
-                for post in candidates
-            )
-        )
 
     def test_recognizes_target_aliases_and_uses_question_target(self):
         posts = [
@@ -129,9 +122,42 @@ class RepeatDoseFilterTests(unittest.TestCase):
             candidates[0]["repeat_dose_evidence"]["target_terms"],
         )
 
+    def test_recognizes_common_target_medicine_misspellings(self):
+        posts = [
+            make_post(
+                "acetaminophen_typo",
+                "Can I take acetominophen again?",
+                "The first dose did not help.",
+            ),
+            make_post(
+                "ibuprofen_typo",
+                "Can I take ibufrofin again?",
+                "It has been several hours.",
+                medicine="ibuprofen",
+            ),
+        ]
+        medicine_terms = {
+            "acetaminophen": MEDICINE_TERMS["acetaminophen"]
+            + ["acetominophen", "acetaminaphen"],
+            "ibuprofen": MEDICINE_TERMS["ibuprofen"]
+            + ["ibuprophen", "ibufrofen", "ibufrofin"],
+        }
+
+        candidates, _ = step3_filter.filter_batch(
+            posts,
+            DOSING_TERMS,
+            EXCLUDE_TERMS,
+            OTHER_MEDICINE_TERMS,
+            medicine_terms,
+        )
+
+        self.assertEqual(
+            [post["post_id"] for post in candidates],
+            ["acetaminophen_typo", "ibuprofen_typo"],
+        )
+
     def test_broad_dosing_words_do_not_qualify_unrelated_posts(self):
         posts = [
-            make_post("amount", "How much ibuprofen can I take?", "200 mg pills."),
             make_post(
                 "wait",
                 "Tylenol and a rash",
@@ -154,6 +180,12 @@ class RepeatDoseFilterTests(unittest.TestCase):
                 "This is a general information question.",
                 medicine="ibuprofen",
             ),
+            make_post(
+                "borrowed_body_words",
+                "Can you overdose on ibuprofen",
+                "My friend told me she is taking more ibuprofen than directed.",
+                medicine="ibuprofen",
+            ),
         ]
 
         candidates, stats = run_filter(posts)
@@ -165,30 +197,62 @@ class RepeatDoseFilterTests(unittest.TestCase):
             5,
         )
 
-    def test_adds_medium_confidence_high_recall_candidate(self):
+    def test_keeps_single_dose_amount_questions(self):
         posts = [
             make_post(
-                "medium",
-                "Tylenol timing?",
-                "I took a dose earlier and may take it again.",
-            )
+                "how_much",
+                "How much ibuprofen can I take?",
+                "200 mg pills.",
+                medicine="ibuprofen",
+            ),
+            make_post(
+                "how_many_mg",
+                "How many mg of Tylenol is safe?",
+                "I have a bad headache.",
+            ),
+            make_post(
+                "max_dose",
+                "What is the maximum daily dose of paracetamol?",
+                "Trying to stay under the limit.",
+            ),
+            make_post(
+                "is_n_mg_ok",
+                "Is 800 mg of ibuprofen too much?",
+                "That is what I have on hand.",
+                medicine="ibuprofen",
+            ),
         ]
 
         candidates, stats = run_filter(posts)
 
-        self.assertEqual([post["post_id"] for post in candidates], ["medium"])
-        candidate = candidates[0]
-        self.assertEqual(candidate["candidate_confidence"], "medium")
-        self.assertEqual(candidate["candidate_score"], 0.75)
         self.assertEqual(
-            candidate["repeat_dose_evidence"]["rule_id"],
-            "high_recall_signal_combination",
+            [post["post_id"] for post in candidates],
+            ["how_much", "how_many_mg", "max_dose", "is_n_mg_ok"],
         )
-        self.assertTrue(candidate["matched_signals"]["question"])
-        self.assertTrue(candidate["matched_signals"]["action"])
-        self.assertTrue(candidate["matched_signals"]["repeat"])
-        self.assertTrue(candidate["matched_signals"]["time"])
-        self.assertEqual(stats["by_confidence"], {"medium": 1})
+        self.assertEqual(
+            stats["by_repeat_dose_rule"],
+            {"dosing_amount_question": 4},
+        )
+
+    def test_single_dose_scope_still_excludes_other_medicine_subject(self):
+        posts = [
+            make_post(
+                "other_subject",
+                "How much aspirin can I take with Tylenol on hand?",
+                "I have both in the cabinet.",
+            ),
+            make_post(
+                "general_info",
+                "What does Tylenol treat?",
+                "Just curious about it.",
+            ),
+        ]
+
+        candidates, stats = run_filter(posts)
+
+        self.assertEqual(candidates, [])
+        self.assertEqual(stats["flagged_other_medicine"], 1)
+        self.assertEqual(stats["no_repeat_dose_question"], 1)
 
     def test_overdose_and_long_term_words_are_not_automatic_exclusions(self):
         posts = [
@@ -316,7 +380,7 @@ class RepeatDoseFilterTests(unittest.TestCase):
         self.assertEqual(stats["flagged_other_medicine"], 1)
         self.assertEqual(stats["no_repeat_dose_question"], 1)
 
-    def test_other_medicine_filter_still_runs_before_intent_filter(self):
+    def test_incidental_other_medicine_outside_question_does_not_exclude(self):
         posts = [
             make_post(
                 "1",
@@ -328,9 +392,176 @@ class RepeatDoseFilterTests(unittest.TestCase):
 
         candidates, stats = run_filter(posts)
 
+        self.assertEqual([post["post_id"] for post in candidates], ["1"])
+        self.assertEqual(stats["flagged_other_medicine"], 0)
+        self.assertEqual(stats["by_other_medicine"], {})
+
+    def test_contextual_fallback_keeps_flexible_repeat_wording(self):
+        posts = [
+            make_post(
+                "explicit",
+                "Tylenol again tonight—okay?",
+                "The headache came back.",
+            ),
+            make_post(
+                "implicit",
+                "Pain relief timing",
+                "I took Tylenol after lunch. "
+                "The headache returned. "
+                "Could I have one more now?",
+            ),
+        ]
+
+        candidates, stats = run_filter(posts)
+
+        self.assertEqual(
+            [post["post_id"] for post in candidates],
+            ["explicit", "implicit"],
+        )
+        self.assertEqual(
+            stats["by_repeat_dose_rule"],
+            {
+                "contextual_explicit_repeat_question": 1,
+                "contextual_prior_dose_followup": 1,
+            },
+        )
+
+    def test_allows_replace_between_research_targets(self):
+        posts = [
+            make_post(
+                "replace",
+                "Can I replace Tylenol with Advil?",
+                "The first one did not help.",
+            ),
+            make_post(
+                "substitute",
+                "Could I substitute Motrin for Panadol?",
+                "I need to change pain relievers.",
+            ),
+        ]
+
+        candidates, _ = run_filter(posts)
+
+        self.assertEqual(
+            [post["post_id"] for post in candidates],
+            ["replace", "substitute"],
+        )
+
+    def test_target_pair_combination_requires_timing_context(self):
+        posts = [
+            make_post(
+                "timed",
+                "Can I combine Tylenol and Advil by alternating doses?",
+                "I need a safe schedule.",
+            ),
+            make_post(
+                "interaction",
+                "Do Tylenol and Advil combine well?",
+                "I am asking about their interaction.",
+            ),
+        ]
+
+        candidates, stats = run_filter(posts)
+
+        self.assertEqual([post["post_id"] for post in candidates], ["timed"])
+        self.assertEqual(stats["flagged_excluded_intent"], 1)
+
+    def test_contextual_fallback_rejects_unrelated_nearby_questions(self):
+        posts = [
+            make_post(
+                "symptom",
+                "Is this ER worthy?",
+                "I have taken Tylenol and Advil but the pain remains. "
+                "Should I go to the ER?",
+            ),
+            make_post(
+                "vaccine",
+                "Could this be related to the second dose?",
+                "The vaccine symptoms went away with Advil.",
+                medicine="ibuprofen",
+            ),
+            make_post(
+                "first_dose",
+                "How soon after surgery is it okay to take Advil?",
+                "I have not taken any pain medicine yet.",
+                medicine="ibuprofen",
+            ),
+        ]
+
+        candidates, stats = run_filter(posts)
+
         self.assertEqual(candidates, [])
-        self.assertEqual(stats["flagged_other_medicine"], 1)
-        self.assertEqual(stats["by_other_medicine"], {"aspirin": 1})
+        self.assertEqual(stats["no_repeat_dose_question"], 3)
+
+    def test_alcohol_drink_wording_is_excluded(self):
+        posts = [
+            make_post(
+                "drink",
+                "How long after taking Tylenol can I drink?",
+                "I took another Tylenol this morning.",
+            )
+        ]
+
+        candidates, stats = run_filter(posts)
+
+        self.assertEqual(candidates, [])
+        self.assertEqual(stats["flagged_excluded_intent"], 1)
+
+    def test_full_post_context_can_resolve_a_distant_unnamed_question(self):
+        body = (
+            "Tylenol is listed earlier in the post. "
+            + ("Background details without a medicine question. " * 20)
+            + "More unrelated history. Another unrelated sentence. "
+            "Can I take another dose now?"
+        )
+        posts = [
+            make_post(
+                "distant",
+                "Medication question",
+                body,
+            )
+        ]
+
+        candidates, stats = run_filter(posts)
+
+        self.assertEqual([post["post_id"] for post in candidates], ["distant"])
+        self.assertEqual(
+            stats["by_repeat_dose_rule"],
+            {"contextual_post_level_repeat_question": 1},
+        )
+
+    def test_released_intent_terms_do_not_automatically_exclude_redosing(self):
+        posts = [
+            make_post(
+                "interaction",
+                "Is there an interaction if I take Tylenol again?",
+                "This is about another dose.",
+            ),
+            make_post(
+                "how_many",
+                "How many doses of Tylenol can I take again?",
+                "I need another dose.",
+            ),
+            make_post(
+                "how_much",
+                "How much ibuprofen can I take again?",
+                "I took it previously.",
+                medicine="ibuprofen",
+            ),
+            make_post(
+                "higher",
+                "Can I take a higher dose of Tylenol again?",
+                "The earlier dose did not work.",
+            ),
+        ]
+
+        candidates, stats = run_filter(posts)
+
+        self.assertEqual(
+            [post["post_id"] for post in candidates],
+            ["interaction", "how_many", "how_much", "higher"],
+        )
+        self.assertEqual(stats["flagged_excluded_intent"], 0)
 
     def test_other_medicine_match_is_word_bounded(self):
         posts = [
@@ -374,6 +605,28 @@ class RepeatDoseFilterTests(unittest.TestCase):
         )
 
         self.assertEqual(partitioned, len(posts))
+
+    def test_storage_removes_filter_only_metadata(self):
+        candidate = make_post(
+            "keep",
+            "When can I take Tylenol again?",
+            "My headache returned.",
+        )
+        candidate.update(
+            {
+                "medicine_category": "acetaminophen",
+                "repeat_dose_evidence": {"rule_id": "test"},
+                "filter_status": "repeat_dose_candidate",
+            }
+        )
+
+        stored = step3_filter.prepare_candidate_for_storage(candidate)
+
+        self.assertNotIn("medicine_category", stored)
+        self.assertNotIn("repeat_dose_evidence", stored)
+        self.assertNotIn("filter_status", stored)
+        self.assertEqual(stored["post_id"], "keep")
+        self.assertIn("medicine_category", candidate)
 
 
 if __name__ == "__main__":

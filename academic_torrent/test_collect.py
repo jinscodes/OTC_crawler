@@ -25,7 +25,7 @@ import step1_extract as s1
 import step2_clean as s2
 import step3_filter as s3
 
-SAMPLE_SIZE = 50          # maximum final Step 3 posts collected per subreddit
+SAMPLE_SIZE = 10          # maximum final Step 3 posts collected per subreddit
 SCAN_CHUNK  = 10_000      # raw lines processed per streaming batch
 
 # Redirect all outputs to output/test/ with numbered step folders.
@@ -50,10 +50,12 @@ def _merge_filter_stats(total: dict, partial: dict) -> None:
             total[key][name] = total[key].get(name, 0) + count
 
 
-def sample_candidates(subreddit: str, limit: int) -> int:
+def sample_candidates(subreddit: str, limit: int) -> list[dict]:
     """
     Stream raw posts through Steps 1–3 and retain the first `limit` final
     repeat-dose candidates. Stops early at the limit; otherwise scans to EOF.
+
+    Returns the annotation cases ({case_id, cleaned_body}) for this subreddit.
     """
     keywords = cfg.load_keywords()
     medicine_terms = keywords["medicine_terms"]
@@ -129,7 +131,9 @@ def sample_candidates(subreddit: str, limit: int) -> int:
                 sampled_ids.add(post_id)
                 sampled_step1.append(raw)
                 sampled_step2.append(clean)
-                sampled_step3.append(candidate)
+                sampled_step3.append(
+                    s3.prepare_candidate_for_storage(candidate)
+                )
                 if len(sampled_step3) >= limit:
                     break
             if len(sampled_step3) >= limit:
@@ -160,26 +164,40 @@ def sample_candidates(subreddit: str, limit: int) -> int:
         **filter_stats,
         "candidates": len(sampled_step3),
     })
+    cases = [
+        {
+            "case_id": f"{subreddit}_{record.get('post_id', '')}",
+            "cleaned_body": record.get("body_clean", ""),
+        }
+        for record in sampled_step2
+    ]
+
     status = "limit reached" if len(sampled_step3) >= limit else "EOF reached"
     print(
         f"[test] r/{subreddit}: collected {len(sampled_step3)} final "
         f"candidates ({status}, scanned {total:,}, "
         f"target hits {target_matches_examined:,})"
     )
-    return len(sampled_step3)
+    return cases
 
 
 def main() -> None:
     subreddits = cfg.load_subreddits()
     print(f"[test] sample={SAMPLE_SIZE} per subreddit → {cfg.OUTPUT_BASE}\n")
+    all_cases: list[dict] = []
     for subreddit in subreddits:
         try:
-            sample_candidates(subreddit, SAMPLE_SIZE)
+            all_cases.extend(sample_candidates(subreddit, SAMPLE_SIZE))
         except FileNotFoundError as exc:
             print(f"[SKIP] r/{subreddit}: {exc}")
         except Exception as exc:  # noqa: BLE001
             print(f"[ERROR] r/{subreddit}: {exc}")
+
+    os.makedirs(cfg.OUTPUT_BASE, exist_ok=True)
+    annotation_path = os.path.join(cfg.OUTPUT_BASE, "annotation_case.json")
+    cfg.write_json(annotation_path, all_cases)
     print(f"\n[test] done → {cfg.OUTPUT_BASE}")
+    print(f"[test] annotation cases: {len(all_cases)} → {annotation_path}")
 
 
 if __name__ == "__main__":
