@@ -42,12 +42,14 @@ CONFIG_FILE     = os.path.join(BASE_DIR, "pipeline_config.yaml")
 #   step3_filter/{subreddit}.json
 #   step4_llm_annotation/{subreddit}.json   (future)
 #   summary/{subreddit}.json                (per-subreddit stats, all steps)
+#   summary/comprehensive.json              (combined stats for all subreddits)
 #   crawl_summary.json                      (aggregate)
 DIR_STEP1   = "step1_extract"      # step 1 output
 DIR_STEP2   = "step2_clean"        # step 2 output
 DIR_STEP3   = "step3_filter"       # step 3 output
 DIR_STEP4   = "step4_llm_annotation"  # step 4 output (future)
 DIR_SUMMARY = "summary"            # per-subreddit summaries
+COMPREHENSIVE_SUMMARY_FILE = "comprehensive.json"
 
 # ── Config loading ───────────────────────────────────────────────────────────
 
@@ -68,12 +70,22 @@ def load_subreddits() -> list[str]:
 # ── Run parameters (from pipeline_config.yaml) ───────────────────────────────
 _CONFIG      = _load_yaml(CONFIG_FILE)
 _DATE_RANGE  = _CONFIG.get("date_range", {})
+_STEP4_CONFIG = _CONFIG.get("step4_llm_annotation", {})
 
 N_JOBS      = _CONFIG.get("n_jobs", -1)              # joblib workers (-1 = all cores)
 BATCH_SIZE  = _CONFIG.get("batch_size", "auto")      # "auto" or a fixed int
 BATCHES_PER_WORKER = _CONFIG.get("batches_per_worker", 4)  # used when BATCH_SIZE == "auto"
 MIN_PARALLEL_ROWS  = _CONFIG.get("min_parallel_rows", 5000)  # below this: run serial
 REUSE_JSONL = _CONFIG.get("reuse_jsonl", True)       # skip decompress if .jsonl exists
+
+# Step 4 LLM batch controls. The model and prompt location are environment-
+# specific and live in .env; non-secret execution settings stay in this
+# version-controlled pipeline config.
+STEP4_MAX_OUTPUT_TOKENS = _STEP4_CONFIG.get("max_output_tokens", 1_000)
+STEP4_PROGRESS_EVERY = _STEP4_CONFIG.get("progress_every", 10)
+STEP4_MAX_CONSECUTIVE_ERRORS = _STEP4_CONFIG.get("max_consecutive_errors", 3)
+STEP4_CLIENT_MAX_RETRIES = _STEP4_CONFIG.get("client_max_retries", 3)
+STEP4_CLIENT_TIMEOUT_SECONDS = _STEP4_CONFIG.get("client_timeout_seconds", 60.0)
 
 
 def effective_workers() -> int:
@@ -100,7 +112,7 @@ def chunked(items: list, size: int):
         yield items[i:i + size]
 
 START_YEAR = _DATE_RANGE.get("start_year", 2017)
-END_YEAR   = _DATE_RANGE.get("end_year", 2021)
+END_YEAR   = _DATE_RANGE.get("end_year", 2025)
 START_TS = int(datetime(START_YEAR, 1, 1, tzinfo=timezone.utc).timestamp())
 END_TS   = int(datetime(END_YEAR, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp())
 
@@ -154,6 +166,64 @@ def write_json(path: str, data) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def build_comprehensive_summary(
+    subreddits: list[str] | None = None,
+) -> dict:
+    """Combine all available per-subreddit summaries into one document."""
+    configured = subreddits or load_subreddits()
+    per_subreddit = []
+    missing = []
+    total_posts_all = 0
+    total_posts_cleaned = 0
+    total_candidates = 0
+
+    summary_dir = os.path.join(OUTPUT_BASE, DIR_SUMMARY)
+    for subreddit in configured:
+        summary_path = os.path.join(summary_dir, f"{subreddit}.json")
+        summary = read_json(summary_path, default=None)
+        if not summary:
+            missing.append(subreddit)
+            continue
+
+        per_subreddit.append(summary)
+        steps = summary.get("steps", {})
+        total_posts_all += steps.get("step1_extract", {}).get("kept_all", 0)
+        total_posts_cleaned += steps.get("step2_clean", {}).get("kept", 0)
+        total_candidates += steps.get("step3_filter", {}).get("candidates", 0)
+
+    included = [summary["subreddit"] for summary in per_subreddit]
+    # A lean rollup: just the headline totals. Per-subreddit detail already
+    # lives in each summary/{subreddit}.json, so it is not duplicated here.
+    return {
+        "generated_at": now_iso(),
+        "date_range": {
+            "start_year": START_YEAR,
+            "end_year": END_YEAR,
+        },
+        "subreddits": len(included),
+        "subreddits_missing_summary": missing,
+        "posts_by_step": {
+            "step1_extract": total_posts_all,
+            "step2_clean": total_posts_cleaned,
+            "step3_filter": total_candidates,
+        },
+    }
+
+
+def write_comprehensive_summary(
+    subreddits: list[str] | None = None,
+) -> dict:
+    """Write summary/comprehensive.json and return the combined document."""
+    comprehensive = build_comprehensive_summary(subreddits)
+    summary_dir = os.path.join(OUTPUT_BASE, DIR_SUMMARY)
+    os.makedirs(summary_dir, exist_ok=True)
+    write_json(
+        os.path.join(summary_dir, COMPREHENSIVE_SUMMARY_FILE),
+        comprehensive,
+    )
+    return comprehensive
+
+
 def update_summary(subreddit: str, step_key: str, stats: dict) -> None:
     """
     Read the per-subreddit summary (summary/{subreddit}.json), merge in this
@@ -169,6 +239,7 @@ def update_summary(subreddit: str, step_key: str, stats: dict) -> None:
     summary.setdefault("steps", {})[step_key] = stats
     summary["updated_at"] = now_iso()
     write_json(summary_path, summary)
+    write_comprehensive_summary()
 
 
 if __name__ == "__main__":

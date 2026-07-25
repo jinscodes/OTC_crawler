@@ -1,8 +1,33 @@
 # Subreddits to crawl.
 subreddits:
   - AskDocs
-  - medical_advice
-  - AskPharmacists
-  - pharmacy
+  - AskDocs_comments
+  - COVID19
+  - COVID19_support
+  - ChronicPain
+  - DiagnoseMe
+  - Fibromyalgia
+  - Health
+  - HealthAnxiety
   - NoStupidQuestions
-  - TooAfraidToAsk
+  - PsoriaticArthritis
+  - Sciatica
+  - VestibularMigraines
+  - adenomyosis
+  - cgrpMigraine
+  - endometriosis
+  - eyetriage
+  - medical_advice
+  - medicine
+  - migraine
+  - pharmacy
+  - rheumatoid
+  - rheumatoidarthritis
+  - rhinoplastyquestions
+  - wisdomteeth
+  - askdentists
+  - AskMedical
+  - COVID_CANADA
+  - COVID
+  - COVID19positive
+  - medical

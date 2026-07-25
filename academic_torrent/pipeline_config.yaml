@@ -2,8 +2,8 @@
 
 # Keep posts whose created_utc falls within this (inclusive) year range.
 date_range:
-  start_year: 2017
-  end_year: 2021
+  start_year: 2013
+  end_year: 2025
 
 # Step 1 parallel text processing (joblib).
 # Posts inside each raw file are split into batches and processed across CPU
@@ -17,3 +17,11 @@ min_parallel_rows: 5000 # steps 2/3 run serially below this row count (overhead)
 
 # Skip decompression when a non-empty {subreddit}.jsonl already exists.
 reuse_jsonl: true
+
+# Step 4 LLM batch controls. OPENAI_MODEL and STEP4_PROMPT_FILE live in .env.
+step4_llm_annotation:
+  max_output_tokens: 1000
+  progress_every: 10
+  max_consecutive_errors: 3
+  client_max_retries: 3
+  client_timeout_seconds: 60.0

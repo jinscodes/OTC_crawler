@@ -106,8 +106,6 @@ def process_batch(lines: list[str], medicine_terms: dict, start_ts: int,
         # Medicine filter (required)
         title = post.get("title", "") or ""
         body  = post.get("selftext", "") or ""
-        if body in ("[deleted]", "[removed]"):
-            body = ""
         text = f"{title} {body}"
 
         matched_generic = matched_synonym = None
