@@ -70,12 +70,22 @@ def load_subreddits() -> list[str]:
 # ── Run parameters (from pipeline_config.yaml) ───────────────────────────────
 _CONFIG      = _load_yaml(CONFIG_FILE)
 _DATE_RANGE  = _CONFIG.get("date_range", {})
+_STEP4_CONFIG = _CONFIG.get("step4_llm_annotation", {})
 
 N_JOBS      = _CONFIG.get("n_jobs", -1)              # joblib workers (-1 = all cores)
 BATCH_SIZE  = _CONFIG.get("batch_size", "auto")      # "auto" or a fixed int
 BATCHES_PER_WORKER = _CONFIG.get("batches_per_worker", 4)  # used when BATCH_SIZE == "auto"
 MIN_PARALLEL_ROWS  = _CONFIG.get("min_parallel_rows", 5000)  # below this: run serial
 REUSE_JSONL = _CONFIG.get("reuse_jsonl", True)       # skip decompress if .jsonl exists
+
+# Step 4 LLM batch controls. The model and prompt location are environment-
+# specific and live in .env; non-secret execution settings stay in this
+# version-controlled pipeline config.
+STEP4_MAX_OUTPUT_TOKENS = _STEP4_CONFIG.get("max_output_tokens", 1_000)
+STEP4_PROGRESS_EVERY = _STEP4_CONFIG.get("progress_every", 10)
+STEP4_MAX_CONSECUTIVE_ERRORS = _STEP4_CONFIG.get("max_consecutive_errors", 3)
+STEP4_CLIENT_MAX_RETRIES = _STEP4_CONFIG.get("client_max_retries", 3)
+STEP4_CLIENT_TIMEOUT_SECONDS = _STEP4_CONFIG.get("client_timeout_seconds", 60.0)
 
 
 def effective_workers() -> int:

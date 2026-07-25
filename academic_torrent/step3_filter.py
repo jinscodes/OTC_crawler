@@ -131,6 +131,78 @@ _CONTEXTUAL_DECISION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── Decidability tags ────────────────────────────────────────────────────────
+# A candidate is annotation-decidable (a YES/NO is computable under the frozen
+# Drug Facts labels) only when the post supplies the facts a decision needs:
+#   • interval    — a prior dose taken at a stated time (→ min-interval check)
+#   • rolling     — a prior dose with an amount and a time (→ rolling 24h total)
+#   • single_dose — an explicit proposed amount (→ single-dose / 24h max check)
+# Posts with none of these are structurally AMBIGUOUS ("how much can I take?"
+# with no history or proposed amount) and are flagged so downstream annotation
+# can keep only the decidable subset.
+_DECIDE_AMOUNT_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*"
+    r"(?:mg|milligrams?|g|grams?|tablets?|pills?|caplets?|capsules?)\b",
+    re.IGNORECASE,
+)
+_DECIDE_STRENGTH_RE = re.compile(r"\b(?:325|500|200)\s*mg\b", re.IGNORECASE)
+_DECIDE_TIME_RE = re.compile(
+    r"\b(?:"
+    r"(?:\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"eleven|twelve)\s*(?:minutes?|mins?|hours?|hrs?)\s*ago|"
+    r"\d+(?:\.\d+)?\s*(?:hours?|hrs?)\b|"
+    r"at\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)|"
+    r"this\s+morning|this\s+afternoon|this\s+evening|last\s+night|"
+    r"tonight|yesterday|earlier|last\s+dose|previous\s+dose|"
+    r"a\s+few\s+hours\s+ago|couple\s+(?:of\s+)?hours\s+ago"
+    r")\b",
+    re.IGNORECASE,
+)
+_DECIDE_PRIOR_DOSE_RE = re.compile(
+    r"\b(?:took|taken|had|used|swallowed|ingested|popped|"
+    r"have\s+taken|had\s+taken|been\s+taking)\b",
+    re.IGNORECASE,
+)
+_DECIDE_PROPOSED_AMOUNT_RE = re.compile(
+    r"\b(?:take|have|use|do|pop|swallow|down)\b[^.?!]{0,40}"
+    r"\d+(?:\.\d+)?\s*"
+    r"(?:mg|milligrams?|tablets?|pills?|caplets?|capsules?)\b",
+    re.IGNORECASE,
+)
+
+
+def _decidability(text: str) -> dict:
+    """Tag which YES/NO reasoning axis (if any) the post supplies facts for."""
+    has_amount = bool(_DECIDE_AMOUNT_RE.search(text))
+    has_strength = bool(_DECIDE_STRENGTH_RE.search(text))
+    has_time = bool(_DECIDE_TIME_RE.search(text))
+    has_prior_dose = bool(_DECIDE_PRIOR_DOSE_RE.search(text))
+    proposed_amount = bool(_DECIDE_PROPOSED_AMOUNT_RE.search(text))
+
+    interval_decidable = has_prior_dose and has_time
+    rolling_decidable = interval_decidable and has_amount
+    single_dose_decidable = proposed_amount
+
+    if rolling_decidable:
+        axis = "rolling"
+    elif interval_decidable:
+        axis = "interval"
+    elif single_dose_decidable:
+        axis = "single_dose"
+    else:
+        axis = None
+
+    return {
+        "has_prior_dose": has_prior_dose,
+        "has_time": has_time,
+        "has_amount": has_amount,
+        "has_strength": has_strength,
+        "proposed_amount_stated": proposed_amount,
+        "decidable_axis": axis,
+        "decidable": axis is not None,
+    }
+
+
 def _term_source(terms: list[str]) -> str:
     """Return a longest-first, escaped alternation for medicine aliases."""
     unique = sorted(
@@ -1265,9 +1337,11 @@ def filter_batch(
     candidates: list[dict] = []
     flagged_other_medicine = flagged_excluded = 0
     flagged_excluded_intent = no_repeat_dose_question = 0
+    decidable_candidates = 0
     by_other_medicine: dict[str, int] = {}
     by_medicine: dict[str, int] = {}
     by_repeat_dose_rule: dict[str, int] = {}
+    by_decidable_axis: dict[str, int] = {}
 
     for post in posts:
         title = post.get("title_clean")
@@ -1342,10 +1416,17 @@ def filter_batch(
         rule_id = repeat_evidence["rule_id"]
         by_repeat_dose_rule[rule_id] = by_repeat_dose_rule.get(rule_id, 0) + 1
 
+        decidability = _decidability(text)
+        if decidability["decidable"]:
+            decidable_candidates += 1
+            axis = decidability["decidable_axis"]
+            by_decidable_axis[axis] = by_decidable_axis.get(axis, 0) + 1
+
         candidate = dict(post)
         candidate["matched_dosing_terms"] = dosing_matches
         candidate["medicine_category"] = medicine
         candidate["repeat_dose_evidence"] = repeat_evidence
+        candidate["decidability"] = decidability
         candidate["filter_status"] = "repeat_dose_candidate"
         candidates.append(candidate)
 
@@ -1357,6 +1438,9 @@ def filter_batch(
         "no_repeat_dose_question": no_repeat_dose_question,
         "by_medicine": by_medicine,
         "by_repeat_dose_rule": by_repeat_dose_rule,
+        "decidable": decidable_candidates,
+        "undecidable": len(candidates) - decidable_candidates,
+        "by_decidable_axis": by_decidable_axis,
     }
     return candidates, stats
 
@@ -1413,15 +1497,19 @@ def filter_one(subreddit: str) -> dict:
     candidates: list[dict] = []
     flagged_other_medicine = flagged_excluded = 0
     flagged_excluded_intent = no_repeat_dose_question = 0
+    decidable = undecidable = 0
     by_other_medicine: dict[str, int] = {}
     by_medicine: dict[str, int] = {}
     by_repeat_dose_rule: dict[str, int] = {}
+    by_decidable_axis: dict[str, int] = {}
     for recs, st in batch_results:
         candidates.extend(recs)
         flagged_other_medicine += st["flagged_other_medicine"]
         flagged_excluded += st["flagged_excluded"]
         flagged_excluded_intent += st["flagged_excluded_intent"]
         no_repeat_dose_question += st["no_repeat_dose_question"]
+        decidable += st["decidable"]
+        undecidable += st["undecidable"]
         for med, n in st["by_other_medicine"].items():
             by_other_medicine[med] = by_other_medicine.get(med, 0) + n
         for med, n in st["by_medicine"].items():
@@ -1430,6 +1518,8 @@ def filter_one(subreddit: str) -> dict:
             by_repeat_dose_rule[rule_id] = (
                 by_repeat_dose_rule.get(rule_id, 0) + n
             )
+        for axis, n in st["by_decidable_axis"].items():
+            by_decidable_axis[axis] = by_decidable_axis.get(axis, 0) + n
 
     stored_candidates = [
         prepare_candidate_for_storage(candidate)
@@ -1445,11 +1535,17 @@ def filter_one(subreddit: str) -> dict:
         "flagged_excluded_intent":  flagged_excluded_intent,
         "no_repeat_dose_question":  no_repeat_dose_question,
         "candidates":               len(candidates),
+        "decidable":                decidable,
+        "undecidable":              undecidable,
         "by_medicine":              by_medicine,
         "by_repeat_dose_rule":      by_repeat_dose_rule,
+        "by_decidable_axis":        by_decidable_axis,
     }
     cfg.update_summary(subreddit, "step3_filter", stats)
-    print(f"[step3] r/{subreddit}: {len(candidates):,} candidates / {len(posts):,}")
+    print(
+        f"[step3] r/{subreddit}: {len(candidates):,} candidates "
+        f"({decidable:,} decidable) / {len(posts):,}"
+    )
     return stats
 
 

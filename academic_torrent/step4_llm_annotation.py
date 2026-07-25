@@ -14,15 +14,6 @@ except ModuleNotFoundError:  # Supports: python -m academic_torrent.step4_llm_an
     from academic_torrent import step0_config as cfg
 
 
-# Replace this string when the real annotation prompt is ready.
-ANNOTATION_PROMPT = "will be soon"
-
-# The current efficient, high-volume model. Override with --model or
-# OPENAI_MODEL in .env.
-DEFAULT_MODEL = "gpt-5.6-luna"
-DEFAULT_MAX_OUTPUT_TOKENS = 1_000
-DEFAULT_PROGRESS_EVERY = 10
-DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 ENV_FILE = Path(cfg.BASE_DIR).parent / ".env"
 
 
@@ -37,6 +28,49 @@ def load_environment() -> None:
         ) from exc
 
     load_dotenv(ENV_FILE)
+
+
+def configured_model(explicit_model: str | None = None) -> str:
+    """Resolve the model from a CLI override or OPENAI_MODEL in .env."""
+    model = (explicit_model or os.getenv("OPENAI_MODEL") or "").strip()
+    if not model:
+        raise RuntimeError(f"OPENAI_MODEL is missing from {ENV_FILE}")
+    return model
+
+
+def _resolve_prompt_path(prompt_file: str | os.PathLike[str]) -> Path:
+    path = Path(prompt_file).expanduser()
+    if not path.is_absolute():
+        path = ENV_FILE.parent / path
+    return path
+
+
+def load_annotation_prompt(
+    *,
+    prompt: str | None = None,
+    prompt_file: str | os.PathLike[str] | None = None,
+) -> str:
+    """Load a CLI prompt override or the configured versioned prompt file."""
+    if prompt is not None:
+        resolved_prompt = prompt.strip()
+        if not resolved_prompt:
+            raise RuntimeError("The annotation prompt cannot be empty")
+        return resolved_prompt
+
+    configured_file = prompt_file or os.getenv("STEP4_PROMPT_FILE")
+    if not configured_file:
+        raise RuntimeError(f"STEP4_PROMPT_FILE is missing from {ENV_FILE}")
+
+    path = _resolve_prompt_path(configured_file)
+    try:
+        resolved_prompt = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not read annotation prompt file {path}: {exc}"
+        ) from exc
+    if not resolved_prompt:
+        raise RuntimeError(f"Annotation prompt file is empty: {path}")
+    return resolved_prompt
 
 
 def create_client():
@@ -55,7 +89,11 @@ def create_client():
         ) from exc
 
     # The SDK retries transient connection, rate-limit, and server errors.
-    return OpenAI(api_key=api_key, max_retries=3, timeout=60.0)
+    return OpenAI(
+        api_key=api_key,
+        max_retries=cfg.STEP4_CLIENT_MAX_RETRIES,
+        timeout=cfg.STEP4_CLIENT_TIMEOUT_SECONDS,
+    )
 
 
 def _prompt_hash(prompt: str) -> str:
@@ -71,11 +109,7 @@ def _post_input(post: dict) -> str:
     """Serialize only fields useful to the annotator as a JSON user message."""
     payload = {
         "post_id": post.get("post_id"),
-        "subreddit": post.get("subreddit"),
-        "medicine_category": post.get("medicine_category"),
-        "matched_dosing_terms": post.get("matched_dosing_terms", []),
-        "text": post.get("clean_text")
-        or f"{post.get('title', '')} {post.get('body', '')}".strip(),
+        "clean_text": post.get("clean_text"),
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -199,12 +233,12 @@ def _append_checkpoint(path: str, key: str, record: dict) -> None:
 def annotate_one(
     subreddit: str,
     *,
+    model: str,
+    prompt: str,
     client: Any | None = None,
-    model: str = DEFAULT_MODEL,
-    prompt: str = ANNOTATION_PROMPT,
-    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
-    progress_every: int = DEFAULT_PROGRESS_EVERY,
-    max_consecutive_errors: int = DEFAULT_MAX_CONSECUTIVE_ERRORS,
+    max_output_tokens: int = cfg.STEP4_MAX_OUTPUT_TOKENS,
+    progress_every: int = cfg.STEP4_PROGRESS_EVERY,
+    max_consecutive_errors: int = cfg.STEP4_MAX_CONSECUTIVE_ERRORS,
     limit: int | None = None,
     overwrite: bool = False,
     dry_run: bool = False,
@@ -347,29 +381,16 @@ def run(
     """Run Step 4 for each configured or explicitly selected subreddit."""
     selected = subreddits or cfg.load_subreddits()
     dry_run = bool(annotation_options.get("dry_run"))
-    allow_placeholder_prompt = bool(
-        annotation_options.pop("allow_placeholder_prompt", False)
-    )
+    prompt_file = annotation_options.pop("prompt_file", None)
 
     load_environment()
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError(f"OPENAI_API_KEY is missing from {ENV_FILE}")
-
-    model = annotation_options.get("model") or os.getenv(
-        "OPENAI_MODEL", DEFAULT_MODEL
+    model = configured_model(annotation_options.get("model"))
+    prompt = load_annotation_prompt(
+        prompt=annotation_options.get("prompt"),
+        prompt_file=prompt_file,
     )
     annotation_options["model"] = model
-    prompt = annotation_options.get("prompt", ANNOTATION_PROMPT)
-    if (
-        not dry_run
-        and prompt.strip() == ANNOTATION_PROMPT
-        and not allow_placeholder_prompt
-    ):
-        raise RuntimeError(
-            'ANNOTATION_PROMPT is still "will be soon". Update it before a '
-            "live run, or explicitly pass --allow-placeholder-prompt with "
-            "--limit for a small API test."
-        )
+    annotation_options["prompt"] = prompt
 
     client = None if dry_run else create_client()
     print(
@@ -410,28 +431,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         default=None,
-        help=f"OpenAI model (default: OPENAI_MODEL or {DEFAULT_MODEL})",
+        help="OpenAI model (default: OPENAI_MODEL from .env)",
     )
     parser.add_argument(
         "--prompt",
-        default=ANNOTATION_PROMPT,
-        help="Annotation prompt (default: ANNOTATION_PROMPT in this file)",
+        default=None,
+        help="Direct annotation prompt override",
+    )
+    parser.add_argument(
+        "--prompt-file",
+        default=None,
+        help="Prompt file override (default: STEP4_PROMPT_FILE from .env)",
     )
     parser.add_argument(
         "--max-output-tokens",
         type=_positive_int,
-        default=DEFAULT_MAX_OUTPUT_TOKENS,
+        default=cfg.STEP4_MAX_OUTPUT_TOKENS,
     )
     parser.add_argument(
         "--progress-every",
         type=_positive_int,
-        default=DEFAULT_PROGRESS_EVERY,
+        default=cfg.STEP4_PROGRESS_EVERY,
         help="Print a progress update after this many new API calls",
     )
     parser.add_argument(
         "--max-consecutive-errors",
         type=_positive_int,
-        default=DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        default=cfg.STEP4_MAX_CONSECUTIVE_ERRORS,
         help="Stop a subreddit after this many API errors in a row",
     )
     parser.add_argument(
@@ -450,11 +476,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Validate configuration and count calls without calling the API",
     )
-    parser.add_argument(
-        "--allow-placeholder-prompt",
-        action="store_true",
-        help='Allow a live test while ANNOTATION_PROMPT is still "will be soon"',
-    )
     return parser.parse_args()
 
 
@@ -465,13 +486,13 @@ def main() -> None:
             args.subreddits or None,
             model=args.model,
             prompt=args.prompt,
+            prompt_file=args.prompt_file,
             max_output_tokens=args.max_output_tokens,
             progress_every=args.progress_every,
             max_consecutive_errors=args.max_consecutive_errors,
             limit=args.limit,
             overwrite=args.overwrite,
             dry_run=args.dry_run,
-            allow_placeholder_prompt=args.allow_placeholder_prompt,
         )
     except RuntimeError as exc:
         raise SystemExit(f"[step4] ERROR: {exc}") from exc

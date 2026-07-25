@@ -43,9 +43,16 @@ def _merge_filter_stats(total: dict, partial: dict) -> None:
         "flagged_excluded",
         "flagged_excluded_intent",
         "no_repeat_dose_question",
+        "decidable",
+        "undecidable",
     ):
         total[key] += partial[key]
-    for key in ("by_other_medicine", "by_medicine", "by_repeat_dose_rule"):
+    for key in (
+        "by_other_medicine",
+        "by_medicine",
+        "by_repeat_dose_rule",
+        "by_decidable_axis",
+    ):
         for name, count in partial[key].items():
             total[key][name] = total[key].get(name, 0) + count
 
@@ -80,8 +87,11 @@ def sample_candidates(subreddit: str, limit: int) -> list[dict]:
         "flagged_excluded": 0,
         "flagged_excluded_intent": 0,
         "no_repeat_dose_question": 0,
+        "decidable": 0,
+        "undecidable": 0,
         "by_medicine": {},
         "by_repeat_dose_rule": {},
+        "by_decidable_axis": {},
     }
 
     with open(jsonl_path, "r", encoding="utf-8") as fin:
@@ -123,6 +133,11 @@ def sample_candidates(subreddit: str, limit: int) -> list[dict]:
             for candidate in candidates:
                 post_id = candidate.get("post_id", "")
                 if not post_id or post_id in sampled_ids:
+                    continue
+                # Gate: keep only annotation-decidable posts (a YES/NO is
+                # computable). Undecidable "how much can I take?" posts are
+                # tagged in Step 3 but excluded from the annotation sample.
+                if not candidate.get("decidability", {}).get("decidable"):
                     continue
                 raw = raw_by_id.get(post_id)
                 clean = clean_by_id.get(post_id)
@@ -167,9 +182,9 @@ def sample_candidates(subreddit: str, limit: int) -> list[dict]:
     cases = [
         {
             "case_id": f"{subreddit}_{record.get('post_id', '')}",
-            "cleaned_body": record.get("body_clean", ""),
+            "cleaned_text": record.get("clean_text", ""),
         }
-        for record in sampled_step2
+        for record in sampled_step3
     ]
 
     status = "limit reached" if len(sampled_step3) >= limit else "EOF reached"
