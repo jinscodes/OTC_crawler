@@ -1,0 +1,37 @@
+[
+  {
+    "case_id": 1,
+    "drug_focus": "Tylenol",
+    "question_text": "I took 2 Tylenol caplets (325 mg each) 2 hours ago and now I still have throat pain. Can I take another dose right now?",
+    "gold_answer": "NO",
+    "error_category": "timing_interval"
+  },
+  {
+    "case_id": 2,
+    "drug_focus": "Tylenol",
+    "question_text": "I took total 12 Tylenol caplets (325 mg each) last 24 hours and now I still have throat pain. Can I take another dose right now?",
+    "gold_answer": "NO",
+    "error_category": "rolling_24h"
+  },
+  {
+    "case_id": 3,
+    "drug_focus": "Tylenol_Advil",
+    "question_text": "I took 2 Tylenol caplets (325 mg each) at 12:00 PM, and now I still have headache. Can I take Advil's another dose right now?",
+    "gold_answer": "AMBIGUOUS",
+    "error_category": "missing_information"
+  },
+  {
+    "case_id": 4,
+    "drug_focus": "Tylenol",
+    "question_text": "I took 2 extra strength Tylenol caplets (500 mg each) at 2:00 PM, and 6:00 PM. I still have a headache. Can I take another dose at 12:00 AM?",
+    "gold_answer": "YES",
+    "error_category": "timing_interval"
+  },
+  {
+    "case_id": 5,
+    "drug_focus": "Tylenol",
+    "question_text": "I took 2 Tylenol caplets (325 mg each) at 9:00 AM, 1:00 PM, and 6:00 PM. I still have a headache. Can I take another dose at 12:00 AM?",
+    "gold_answer": "YES",
+    "error_category": "timing_interval"
+  }
+]
