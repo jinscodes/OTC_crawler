@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 MIN_MAJOR=3
 MIN_MINOR=10
 VENV_DIR=".venv"
 REQ_FILE="academic_torrent/requirements.txt"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+cd "$SCRIPT_DIR"
 
 # --- pick a python interpreter that is >= 3.10 --------------------------------
 choose_python() {
@@ -53,6 +58,14 @@ if ! "$PY" -c "import venv" >/dev/null 2>&1; then
 fi
 
 # --- create the virtual environment ------------------------------------------
+EXPECTED_VENV="$SCRIPT_DIR/$VENV_DIR"
+if [ -f "$VENV_DIR/bin/activate" ] && ! grep -Fq "$EXPECTED_VENV" "$VENV_DIR/bin/activate"; then
+  VENV_BACKUP="${VENV_DIR}.backup.$(date +%Y%m%d%H%M%S)"
+  echo "==> Existing virtual environment belongs to another path."
+  echo "==> Moving it to ./$VENV_BACKUP ..."
+  mv "$VENV_DIR" "$VENV_BACKUP"
+fi
+
 echo "==> Creating virtual environment at ./$VENV_DIR ..."
 "$PY" -m venv "$VENV_DIR"
 
